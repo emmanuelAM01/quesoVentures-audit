@@ -1,65 +1,80 @@
 #!/usr/bin/env python3
 """
-Queso Ventures - Smart SEO/GEO Audit Generator
-Auto-fetches: PageSpeed score, website existence, basic GBP data
-Manual input:  GBP completeness, visibility, GEO, findings, recommendations
+source .env && python audit.py
 
-Usage:
-    source .env && python audit.py
-
-Requirements:
-    pip install requests beautifulsoup4 reportlab
-
-Optional (for PageSpeed):
-    Get a free API key at https://developers.google.com/speed/docs/insights/v5/get-started
-    Set it in the PAGESPEED_API_KEY variable below or as env var PAGESPEED_KEY
 """
 
-import os
-import re
-import sys
-import time
-import requests
+import os, re, sys, requests
 from bs4 import BeautifulSoup
 from datetime import date
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.units import inch, mm
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
-# ── Config ────────────────────────────────────────────────────────────────────
-# Get free key at: https://developers.google.com/speed/docs/insights/v5/get-started
-PAGESPEED_API_KEY = os.environ.get("PAGESPEED_KEY", "")
+# ─────────────────────────────────────────────
+#  BRAND
+# ─────────────────────────────────────────────
+C_BLACK  = colors.HexColor("#0A0C10")   # near-black bg
+C_DARK   = colors.HexColor("#12161E")   # card bg
+C_YELLOW = colors.HexColor("#FFD100")   # primary accent
+C_WHITE  = colors.HexColor("#FFFFFF")
+C_GRAY   = colors.HexColor("#8A909C")   # muted text
+C_LGRAY  = colors.HexColor("#1E2330")   # subtle card
+C_RED    = colors.HexColor("#E03535")
+C_ORANGE = colors.HexColor("#F5A623")
+C_GREEN  = colors.HexColor("#27AE60")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-}
+PAGE_W, PAGE_H = letter   # 612 x 792
+PAD = 40                  # outer padding
 
-# ── Brand Colors ──────────────────────────────────────────────────────────────
-YELLOW     = colors.HexColor("#F5C842")
-DARK       = colors.HexColor("#1A1A1A")
-LIGHT_GRAY = colors.HexColor("#F5F5F5")
-MID_GRAY   = colors.HexColor("#CCCCCC")
-TEXT_GRAY  = colors.HexColor("#555555")
-WHITE      = colors.white
-RED        = colors.HexColor("#E74C3C")
-ORANGE     = colors.HexColor("#F39C12")
-GREEN      = colors.HexColor("#2ECC71")
+AUDITOR   = "Queso Ventures"
+SITE_URL  = "quesoventures.com"
+LOGO_URL  = "https://www.quesoventures.com/logo.png"
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qv_logo.png")
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def score_color(score, max_score=5):
-    pct = score / max_score
-    if pct < 0.4:   return RED
-    elif pct < 0.7: return ORANGE
-    else:           return GREEN
+def ensure_logo():
+    """Download logo once and cache it next to the script."""
+    if os.path.exists(LOGO_PATH):
+        return LOGO_PATH
+    try:
+        print("  Downloading logo...", end=" ", flush=True)
+        r = requests.get(LOGO_URL, timeout=10)
+        if r.status_code == 200:
+            with open(LOGO_PATH, "wb") as f:
+                f.write(r.content)
+            print("done")
+            return LOGO_PATH
+        print(f"failed (HTTP {r.status_code})")
+    except Exception as e:
+        print(f"failed ({e})")
+    return None
 
-def score_label(score, max_score=5):
-    pct = score / max_score
-    if pct < 0.4:   return "Needs Work"
-    elif pct < 0.7: return "Fair"
-    else:           return "Good"
+# ─────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────
+def score_color(s, mx=5):
+    p = s / mx
+    return C_RED if p < 0.4 else (C_ORANGE if p < 0.7 else C_GREEN)
+
+def score_label(s, mx=5):
+    p = s / mx
+    return "Needs Work" if p < 0.4 else ("Fair" if p < 0.7 else "Good")
+
+def pct_color(p):
+    if p is None: return C_GRAY
+    return C_RED if p < 50 else (C_ORANGE if p < 70 else C_GREEN)
+
+def pct_label(p):
+    if p is None: return "N/A"
+    return f"{p}/100"
+
+def rr(v, dec=1):
+    """Right-round a rect: draw filled rect."""
+    return v
 
 def prompt(label, options=None, default=None):
     if options:
@@ -69,606 +84,788 @@ def prompt(label, options=None, default=None):
         while True:
             try:
                 val = int(input("    Enter number: ").strip())
-                if 1 <= val <= len(options):
-                    return val
-            except ValueError:
-                pass
+                if 1 <= val <= len(options): return val
+            except ValueError: pass
             print("    Invalid. Try again.")
     else:
         suffix = f" [{default}]" if default else ""
         val = input(f"  {label}{suffix}: ").strip()
         return val if val else default
 
-def clean_url(url):
-    """Normalize URL for requests."""
-    if not url:
-        return None
-    url = url.strip()
-    if not url.startswith("http"):
-        url = "https://" + url
-    return url
-
 def divider(title=""):
-    width = 55
+    w = 60
     if title:
-        pad = (width - len(title) - 2) // 2
+        pad = (w - len(title) - 2) // 2
         print(f"\n{'─'*pad} {title} {'─'*pad}")
     else:
-        print(f"\n{'─'*width}")
+        print(f"\n{'─'*w}")
 
-# ── Auto-fetch Functions ──────────────────────────────────────────────────────
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+}
+PAGESPEED_KEY = os.environ.get("PAGESPEED_KEY", "")
+
 def check_website(url):
-    """Check if website exists and is reachable."""
-    if not url or url.lower() in ("none", "n", ""):
-        return False, None, "No website provided"
-
-    clean = clean_url(url)
+    if not url or url.lower() in ("none","n",""): return False, None, None
+    if not url.startswith("http"): url = "https://" + url
     try:
-        resp = requests.get(clean, headers=HEADERS, timeout=8, allow_redirects=True)
-        if resp.status_code < 400:
-            print(f"  ✓ Website reachable: {resp.url} (HTTP {resp.status_code})")
-            return True, clean, resp.text
-        else:
-            print(f"  ✗ Website returned HTTP {resp.status_code}")
-            return False, clean, None
-    except requests.exceptions.SSLError:
-        # Try http fallback
-        try:
-            clean_http = clean.replace("https://", "http://")
-            resp = requests.get(clean_http, headers=HEADERS, timeout=8)
-            return True, clean_http, resp.text
-        except:
-            return False, clean, None
-    except Exception as e:
-        print(f"  ✗ Could not reach website: {e}")
-        return False, clean, None
+        r = requests.get(url, headers=HEADERS, timeout=8, allow_redirects=True)
+        return (r.status_code < 400), url, r.text if r.status_code < 400 else None
+    except: return False, url, None
 
-def get_pagespeed_score(url):
-    """Fetch mobile PageSpeed score from Google API."""
-    if not url:
-        return None, "No website"
-
-    print("  Fetching PageSpeed score...", end=" ", flush=True)
-
-    api_url = f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+def get_pagespeed(url, label="", full=False):
+    """
+    Fetch PageSpeed data with retry. full=True returns rich dict; full=False returns perf int.
+    """
+    if not url: return (None if not full else {})
+    tag = f" [{label}]" if label else ""
     params = {
-        "url": url,
+        "url":      url,
         "strategy": "mobile",
-        "category": "performance",
+        "category": ["performance", "seo"],
     }
-    if PAGESPEED_API_KEY:
-        params["key"] = PAGESPEED_API_KEY
+    if PAGESPEED_KEY: params["key"] = PAGESPEED_KEY
 
+    for attempt in range(1, 3):
+        retry_tag = "  (retry)" if attempt > 1 else ""
+        print(f"  Fetching PageSpeed{tag}{retry_tag}...", end=" ", flush=True)
+        try:
+            r    = requests.get(
+                "https://www.googleapis.com/pagespeedonline/v5/runPagespeed",
+                params=params, timeout=50
+            )
+            data = r.json()
+            lhr  = data.get("lighthouseResult", {})
+            cats = lhr.get("categories", {})
+
+            perf_score = cats.get("performance", {}).get("score")
+            seo_score  = cats.get("seo", {}).get("score")
+            perf_pct   = int(perf_score * 100) if perf_score is not None else None
+            seo_pct    = int(seo_score  * 100) if seo_score  is not None else None
+            print(f"perf={perf_pct}/100  seo={seo_pct}/100" if seo_pct else f"{perf_pct}/100")
+
+            if not full:
+                return perf_pct
+
+            # ── Core Web Vitals (real user data from Chrome) ──
+            le   = data.get("loadingExperience", {})
+            mets = le.get("metrics", {})
+            def cwv_metric(key):
+                m = mets.get(key, {})
+                return {"rating": m.get("category", "N/A"), "value": m.get("percentile")}
+            cwv = {
+                "lcp": cwv_metric("LARGEST_CONTENTFUL_PAINT_MS"),
+                "fid": cwv_metric("FIRST_INPUT_DELAY_MS"),
+                "cls": cwv_metric("CUMULATIVE_LAYOUT_SHIFT_SCORE"),
+            }
+
+            # ── Top failing audits → plain English ──
+            audits = lhr.get("audits", {})
+            AUDIT_PLAIN = {
+                "render-blocking-resources":       "Slow-loading code is delaying your page from appearing",
+                "unused-javascript":               "Your site loads code it doesn't use, slowing it down",
+                "unused-css-rules":                "Your site loads unused styling files, wasting load time",
+                "uses-optimized-images":           "Images on your site are too large and slowing it down",
+                "uses-responsive-images":          "Images aren't sized for phones, making mobile visitors wait",
+                "uses-text-compression":           "Text files aren't compressed, making your site slower to load",
+                "server-response-time":            "Your hosting server is responding slowly to visitors",
+                "largest-contentful-paint-element":"Your main page content takes too long to appear on screen",
+                "total-blocking-time":             "Your page briefly freezes while loading, frustrating visitors",
+            }
+            failures = []
+            for key, plain in AUDIT_PLAIN.items():
+                audit = audits.get(key, {})
+                sc    = audit.get("score")
+                disp  = audit.get("displayValue", "")
+                if sc is not None and sc < 0.9 and disp:
+                    savings = re.search(r"[\d\.]+\s*s", disp)
+                    suffix  = f" ({savings.group(0)} savings)" if savings else ""
+                    failures.append(f"{plain}{suffix}")
+
+            return {
+                "perf_score": perf_pct,
+                "seo_score":  seo_pct,
+                "cwv":        cwv,
+                "top_audits": failures[:3],
+            }
+
+        except Exception as e:
+            is_timeout = any(w in str(e).lower() for w in ("timed out", "timeout", "read timeout"))
+            print("timed out" if is_timeout else f"failed ({e})")
+            if attempt == 2:
+                return None if not full else {}
+            import time; time.sleep(2)
+
+def ps_to_score(p):
+    if p is None: return None
+    if p >= 90: return 5
+    if p >= 70: return 4
+    if p >= 50: return 3
+    if p >= 30: return 2
+    return 1
+
+def scrape_gbp(name, city):
+    print("  Fetching GBP...", end=" ", flush=True)
+    q = f"{name} {city}"
     try:
-        resp = requests.get(api_url, params=params, timeout=20)
-        data = resp.json()
-        score = data.get("lighthouseResult", {}).get("categories", {}).get("performance", {}).get("score")
-        if score is not None:
-            pct = int(score * 100)
-            print(f"{pct}/100")
-            return pct, None
-        else:
-            error = data.get("error", {}).get("message", "Unknown error")
-            print(f"API error: {error}")
-            return None, error
+        r = requests.get(f"https://www.google.com/search?q={requests.utils.quote(q)}",
+                         headers=HEADERS, timeout=10)
+        txt = BeautifulSoup(r.text,"html.parser").get_text(" ", strip=True)
+        rat = re.search(r'\b([1-5]\.[0-9])\b', txt[:3000])
+        rev = re.search(r'[\(\s](\d{1,5})\s*(?:Google\s+)?reviews?\b', txt[:3000], re.I)
+        print(f"rating={rat.group(1) if rat else '?'}")
+        return (rat.group(1) if rat else None), (rev.group(1) if rev else None)
     except Exception as e:
-        print(f"Failed ({e})")
-        return None, str(e)
+        print(f"failed ({e})"); return None, None
 
-def pagespeed_to_score(pct):
-    """Convert 0-100 PageSpeed score to 1-5."""
-    if pct is None:  return None
-    if pct >= 90:    return 5
-    elif pct >= 70:  return 4
-    elif pct >= 50:  return 3
-    elif pct >= 30:  return 2
-    else:            return 1
-
-def scrape_gbp_basics(business_name, city):
-    """
-    Scrape basic GBP info from Google search.
-    Returns dict with rating, review_count, has_hours, has_photos (best effort).
-    """
-    print("  Fetching Google Business Profile data...", end=" ", flush=True)
-    query = f"{business_name} {city}"
-    search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}"
-
-    try:
-        resp = requests.get(search_url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        text = soup.get_text(" ", strip=True)
-
-        # Extract rating (e.g. "4.9" or "4.9 stars")
-        rating_match = re.search(r'\b([1-5]\.[0-9])\b', text[:3000])
-        rating = rating_match.group(1) if rating_match else None
-
-        # Extract review count (e.g. "692 reviews" or "(692)")
-        review_match = re.search(r'[\(\s](\d{1,5})\s*(?:Google\s+)?reviews?\b', text[:3000], re.IGNORECASE)
-        review_count = review_match.group(1) if review_match else None
-
-        # Check for hours presence
-        has_hours = bool(re.search(r'\b(open|closed|hours|AM|PM)\b', text[:3000], re.IGNORECASE))
-
-        print(f"rating={rating or '?'}, reviews={review_count or '?'}")
-        return {
-            "rating": rating or "?",
-            "review_count": review_count or "?",
-            "has_hours": has_hours,
-        }
-    except Exception as e:
-        print(f"Failed ({e})")
-        return {"rating": "?", "review_count": "?", "has_hours": False}
-
-def check_website_seo_basics(html, city, business_type):
-    """
-    Parse HTML to check basic SEO signals:
-    - City name in title/h1/first paragraph
-    - Service type mentioned
-    - Mobile viewport tag
-    - Phone number present
-    Returns dict of findings.
-    """
-    if not html:
-        return {}
-
-    soup = BeautifulSoup(html, "html.parser")
-    text_lower = soup.get_text(" ").lower()
-    city_lower = city.lower().split(",")[0].strip()
-    type_lower = business_type.lower().split()[0]
-
-    title_tag   = soup.find("title")
-    title_text  = title_tag.get_text().lower() if title_tag else ""
-    h1_tags     = [h.get_text().lower() for h in soup.find_all("h1")]
-    viewport    = soup.find("meta", attrs={"name": "viewport"})
-    phone       = re.search(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}', soup.get_text())
-
-    city_in_title   = city_lower in title_text
-    city_in_h1      = any(city_lower in h for h in h1_tags)
-    city_in_content = city_lower in text_lower
-    service_mentioned = type_lower in text_lower
-    is_mobile_ready = viewport is not None
-    has_phone       = phone is not None
-
+def seo_check(html, city, btype):
+    if not html: return {}
+    soup = BeautifulSoup(html,"html.parser")
+    tl   = soup.find("title")
+    city_l = city.lower().split(",")[0].strip()
+    type_l = btype.lower().split()[0]
+    txt    = soup.get_text(" ").lower()
+    h1s    = [h.get_text().lower() for h in soup.find_all("h1")]
     return {
-        "city_in_title":    city_in_title,
-        "city_in_h1":       city_in_h1,
-        "city_in_content":  city_in_content,
-        "service_mentioned":service_mentioned,
-        "is_mobile_ready":  is_mobile_ready,
-        "has_phone":        has_phone,
+        "city_in_title":     city_l in (tl.get_text().lower() if tl else ""),
+        "city_in_h1":        any(city_l in h for h in h1s),
+        "city_in_content":   city_l in txt,
+        "service_mentioned": type_l in txt,
+        "is_mobile_ready":   bool(soup.find("meta", attrs={"name":"viewport"})),
+        "has_phone":         bool(re.search(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}', soup.get_text())),
     }
 
-def auto_website_score(site_exists, seo):
-    """
-    Derive a 1-5 website score from automated signals.
-    Returns score and list of auto-detected issues.
-    """
-    if not site_exists:
-        return 1, ["No website found"]
-
-    issues = []
-    score = 5
-
-    if not seo.get("city_in_title"):
-        score -= 0.5
-        issues.append("City not in page title")
-    if not seo.get("city_in_h1"):
-        score -= 0.5
-        issues.append("City not in main headline")
-    if not seo.get("city_in_content"):
-        score -= 1
-        issues.append("City name not found in page content")
-    if not seo.get("service_mentioned"):
-        score -= 1
-        issues.append("Service type not clearly mentioned on page")
-    if not seo.get("is_mobile_ready"):
-        score -= 1
-        issues.append("No mobile viewport meta tag — may not be mobile friendly")
-    if not seo.get("has_phone"):
-        score -= 0.5
-        issues.append("No phone number detected on page")
-
+def auto_site_score(exists, seo):
+    if not exists: return 1, ["No website found — you're invisible to anyone searching online"]
+    issues, score = [], 5
+    if not seo.get("city_in_title"):    score-=0.5; issues.append("Your city name is missing from your page title — Google can't tell where you are")
+    if not seo.get("city_in_h1"):       score-=0.5; issues.append("Your city name isn't in your main headline — customers searching locally won't find you")
+    if not seo.get("city_in_content"):  score-=1;   issues.append("Your city is barely mentioned on your website — Google doesn't know you're local")
+    if not seo.get("service_mentioned"):score-=1;   issues.append("What you do isn't clearly stated on your website — visitors and Google have to guess")
+    if not seo.get("is_mobile_ready"):  score-=1;   issues.append("Your site may not display properly on phones — most of your customers search on mobile")
+    if not seo.get("has_phone"):        score-=0.5; issues.append("No phone number found on your website — customers can't easily call you")
     return max(1, round(score)), issues
 
-# ── Data Collection ───────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  DATA COLLECTION
+# ─────────────────────────────────────────────
 def collect_data():
-    print("\n" + "="*55)
-    print("  QUESO VENTURES — SMART AUDIT GENERATOR")
-    print("="*55)
+    print("\n" + "="*60)
+    print("  QUESO VENTURES — AUDIT GENERATOR")
+    print("="*60)
+    data, auto_findings = {}, []
+    score_opts = ["1 - Very Poor","2 - Poor","3 - Fair","4 - Good","5 - Excellent"]
 
-    data = {}
-    auto_findings = []  # findings detected automatically
-
-    # ── Business Info ──────────────────────────────────────────────────────────
-    divider("BUSINESS INFO")
+    divider("CLIENT")
     data["business_name"] = prompt("Business name")
-    data["business_type"] = prompt("Business type (e.g. Auto Repair, Barber Shop)")
-    data["business_city"] = prompt("City / Neighborhood (e.g. Humble, TX)")
+    data["business_type"] = prompt("Business type (e.g. Auto Repair, Event Venue)")
+    data["business_city"] = prompt("City / Area (e.g. Humble, TX)")
+    url_in = prompt("Website URL (blank if none)", default="")
+    data["has_website"] = bool(url_in and url_in.lower() not in ("none","n",""))
+    data["website_url"]  = url_in if data["has_website"] else ""
 
-    website_input = prompt("Website URL (or leave blank if none)", default="")
-    data["has_website"] = bool(website_input and website_input.lower() not in ("none","n",""))
-    data["website_url"] = website_input if data["has_website"] else "None"
+    divider("AUTO-FETCHING CLIENT")
+    exists, site_url, html = check_website(data["website_url"])
+    if data["has_website"] and not exists:
+        confirm = prompt("Could not reach site — mark as existing anyway? (y/n)", default="n").lower()
+        if confirm == "y": exists = True; html = None
+    data["has_website"] = exists
+    seo = seo_check(html, data["business_city"], data["business_type"]) if html else {}
+    ws_score, ws_issues = auto_site_score(exists, seo)
+    auto_findings.extend(ws_issues)
 
-    # ── Auto-fetch Phase ───────────────────────────────────────────────────────
-    divider("AUTO-FETCHING DATA")
+    client_ps_data = get_pagespeed(site_url, "client", full=True) if exists else {}
+    client_ps      = client_ps_data.get("perf_score") if client_ps_data else None
+    client_seo_pct = client_ps_data.get("seo_score")  if client_ps_data else None
+    client_cwv     = client_ps_data.get("cwv", {})    if client_ps_data else {}
+    client_audits  = client_ps_data.get("top_audits", []) if client_ps_data else []
 
-    # 1. Website check — with manual fallback
-    site_exists, site_url, html = check_website(data["website_url"] if data["has_website"] else None)
+    # Manual fallback if API failed
+    if exists and client_ps is None:
+        print("  PageSpeed fetch failed — enter manually at pagespeed.web.dev\n")
+        _ps_in = prompt("  Client phone speed score (0-100, or blank to skip)", default="")
+        client_ps = int(_ps_in) if _ps_in and _ps_in.isdigit() else None
+        _seo_in = prompt("  Client SEO score (0-100, or blank to skip)", default="")
+        client_seo_pct = int(_seo_in) if _seo_in and _seo_in.isdigit() else None
 
-    if data["has_website"] and not site_exists:
-        print(f"  ✗ Could not reach site automatically.")
-        manual_confirm = prompt("  Do you know the site exists? (y/n)", default="n").lower()
-        if manual_confirm == "y":
-            site_exists = True
-            site_url    = clean_url(data["website_url"])
-            html        = None
-            print("  ✓ Marked as existing (manual confirm) — SEO checks skipped")
+    data["client_ps"]      = client_ps
+    data["client_seo_pct"] = client_seo_pct
+    data["client_cwv"]     = client_cwv
+    ps_score = ps_to_score(client_ps)
 
-    data["has_website"] = site_exists
+    if client_ps is not None:
+        if client_ps < 50:   auto_findings.append(f"Your site takes too long to load on phones ({client_ps}/100) — visitors leave before it opens")
+        elif client_ps < 70: auto_findings.append(f"Your site is slower than average on phones ({client_ps}/100) — this costs you customers")
+    if client_seo_pct is not None and client_seo_pct < 80:
+        auto_findings.append(f"Google found technical issues on your site that make it harder to rank ({client_seo_pct}/100)")
+    # Add top Lighthouse audit failures as findings
+    for audit_str in client_audits:
+        auto_findings.append(audit_str)
 
-    # 2. SEO basics from HTML (only if we actually got the HTML)
-    seo = check_website_seo_basics(html, data["business_city"], data["business_type"]) if html else {}
-    auto_site_score, site_issues = auto_website_score(site_exists, seo)
-    auto_findings.extend(site_issues)
+    rat, rev = scrape_gbp(data["business_name"], data["business_city"])
+    if not rat:
+        print("  GBP scrape failed — enter manually (check Google)\n")
+        rat = prompt("  Google star rating (e.g. 4.2)", default="?")
+        rev = prompt("  Google review count", default="0")
+    data["review_rating"] = rat or "?"
+    data["review_count"]  = rev or "0"
 
-    # 3. PageSpeed
-    pagespeed_pct, ps_error = get_pagespeed_score(site_url) if site_exists else (None, "No website")
-    auto_speed_score = pagespeed_to_score(pagespeed_pct)
-    if pagespeed_pct is not None:
-        if pagespeed_pct < 50:
-            auto_findings.append(f"Mobile PageSpeed score is {pagespeed_pct}/100 — very slow, hurts rankings")
-        elif pagespeed_pct < 70:
-            auto_findings.append(f"Mobile PageSpeed score is {pagespeed_pct}/100 — needs improvement")
+    print(f"\n  Client: website={'✓' if exists else '✗'}  perf={client_ps or 'N/A'}  seo={client_seo_pct or 'N/A'}  rating={data['review_rating']}  reviews={data['review_count']}")
 
-    # 4. GBP basics — try scraping, always fall back to manual
-    gbp = scrape_gbp_basics(data["business_name"], data["business_city"])
-
-    if gbp["rating"] == "?" or gbp["review_count"] == "?":
-        print("  Could not scrape GBP data — enter manually.")
-        print("  (Look at their Google listing in your browser)\n")
-        data["review_rating"] = prompt("  Google star rating (e.g. 4.2, or 'none')", default="none")
-        data["review_count"]  = prompt("  Number of Google reviews (or '0')", default="0")
-    else:
-        data["review_rating"] = gbp["rating"]
-        data["review_count"]  = gbp["review_count"]
-
-    # Print summary of what was auto-detected
-    print("\n  Auto-detected:")
-    print(f"    Website:      {'✓ Found' if site_exists else '✗ Not found'}")
-    if site_exists and html:
-        print(f"    PageSpeed:    {pagespeed_pct if pagespeed_pct else 'Could not fetch (quota or no key)'}")
-        print(f"    City in title:{'✓' if seo.get('city_in_title') else '✗'}")
-        print(f"    Mobile ready: {'✓' if seo.get('is_mobile_ready') else '✗'}")
-        print(f"    Phone on site:{'✓' if seo.get('has_phone') else '✗'}")
-    elif site_exists:
-        print(f"    PageSpeed:    {pagespeed_pct if pagespeed_pct else 'Could not fetch (quota or no key)'}")
-        print(f"    SEO checks:   Skipped (site confirmed manually)")
-    print(f"    Rating:       {data['review_rating']}")
-    print(f"    Reviews:      {data['review_count']}")
-
-    # ── Competitor ─────────────────────────────────────────────────────────────
     divider("COMPETITOR")
-    print(f"  Search Google for: \"{data['business_type']} {data['business_city']}\"")
-    print("  Find the top map result that isn't this business.")
-    print("  Leave blank and hit Enter to skip any field.\n")
-    data["comp_name"]     = prompt("Competitor name", default="N/A")
-    data["comp_reviews"]  = prompt("Competitor review count", default="N/A")
-    data["comp_rating"]   = prompt("Competitor star rating", default="N/A")
-    data["comp_has_site"] = prompt("Competitor has website? (y/n)", default="y").lower() == "y"
+    print(f'  Search Google: "{data["business_type"]} {data["business_city"]}" — pick the top result that is NOT the client.\n')
+    data["comp_name"]    = prompt("Competitor name", default="N/A")
+    data["comp_rating"]  = prompt("Competitor star rating", default="?")
+    data["comp_reviews"] = prompt("Competitor review count", default="?")
+    comp_url_in = prompt("Competitor website URL (blank if none)", default="")
+    data["comp_has_site"] = bool(comp_url_in and comp_url_in.lower() not in ("none","n",""))
+    data["comp_website"]  = comp_url_in
 
-    # ── Manual Scores ──────────────────────────────────────────────────────────
-    divider("SCORING")
+    data["comp_ps"]      = None
+    data["comp_seo_pct"] = None
+    if data["comp_has_site"]:
+        print()
+        comp_exists, comp_url, _ = check_website(comp_url_in)
+        if comp_exists:
+            comp_ps_data         = get_pagespeed(comp_url, "competitor", full=True)
+            data["comp_ps"]      = comp_ps_data.get("perf_score") if comp_ps_data else None
+            data["comp_seo_pct"] = comp_ps_data.get("seo_score")  if comp_ps_data else None
+            if data["comp_ps"] is None:
+                print("  PageSpeed fetch failed — enter manually at pagespeed.web.dev\n")
+                _cp = prompt("  Competitor phone speed score (0-100, or blank to skip)", default="")
+                data["comp_ps"] = int(_cp) if _cp and _cp.isdigit() else None
+                _cs = prompt("  Competitor SEO score (0-100, or blank to skip)", default="")
+                data["comp_seo_pct"] = int(_cs) if _cs and _cs.isdigit() else None
 
-    score_opts = ["1 - Very Poor", "2 - Poor", "3 - Fair", "4 - Good", "5 - Excellent"]
+    divider("SCORING — CLIENT")
 
-    # Website score — use auto if available, let them override
-    if auto_site_score and site_exists:
-        print(f"\n  Website Quality — auto-detected score: {auto_site_score}/5")
-        override = prompt("  Override? (leave blank to accept)", default="")
-        data["website_score"] = int(override) if override.isdigit() else auto_site_score
-    elif not site_exists:
-        data["website_score"] = 1
-        print(f"\n  Website Quality — set to 1 (no website found)")
+    # Website
+    if exists:
+        print(f"\n  [CLIENT] Website Quality — auto-score: {ws_score}/5")
+        ov = prompt("  Override? (blank = accept)", default="")
+        data["website_score"] = int(ov) if ov and ov.isdigit() else ws_score
     else:
-        data["website_score"] = prompt("Website Quality\n   (Does it exist? Clear content, mentions city+service?)", options=score_opts)
+        data["website_score"] = 1; print("\n  [CLIENT] Website Quality — 1 (no site)")
 
-    # Speed score — use auto if available
-    if auto_speed_score:
-        print(f"\n  Mobile Page Speed — auto-detected score: {auto_speed_score}/5 ({pagespeed_pct}/100)")
-        override = prompt("  Override? (leave blank to accept)", default="")
-        data["speed_score"] = int(override) if override.isdigit() else auto_speed_score
-    elif not site_exists:
+    # Speed
+    if ps_score:
+        print(f"\n  [CLIENT] Mobile Page Speed — auto-score: {ps_score}/5 ({client_ps}/100)")
+        ov = prompt("  Override? (blank = accept)", default="")
+        data["speed_score"] = int(ov) if ov and ov.isdigit() else ps_score
+    elif not exists:
         data["speed_score"] = 1
-        print(f"\n  Mobile Page Speed — set to 1 (no website found)")
     else:
-        print(f"\n  Mobile Page Speed — could not auto-fetch")
-        if not PAGESPEED_API_KEY:
-            print("  Tip: Add a free PageSpeed API key to enable auto-scoring")
-            print("  Get one at: https://developers.google.com/speed/docs/insights/v5/get-started")
-        data["speed_score"] = prompt("  Score manually", options=score_opts)
+        if not PAGESPEED_KEY: print("  Tip: set PAGESPEED_KEY env var for auto-scoring")
+        data["speed_score"] = prompt("[CLIENT] Mobile Page Speed (score manually)", options=score_opts)
 
-    # GBP — manual, but give them context
-    print(f"\n  Google Business Profile")
-    print(f"  Check: photos, services listed, description written, posts, correct hours")
+    # GBP
+    print(f"\n  [CLIENT] Google Business Profile")
+    print("  Check: complete photos, hours, description, services, recent posts?")
     data["gbp_score"] = prompt("  Score", options=score_opts)
 
-    # Visibility — manual
-    print(f"\n  Local Search Visibility")
-    print(f"  Search: \"{data['business_type']} {data['business_city']}\" — are they in the top 3 map results?")
+    # Visibility
+    print(f'\n  [CLIENT] Local Search Visibility')
+    print(f'  Search: "{data["business_type"]} {data["business_city"]}" — is the CLIENT in the top 3 map results?')
     data["visibility_score"] = prompt("  Score", options=score_opts)
 
-    # GEO — manual
-    print(f"\n  GEO / AI Search Readiness")
-    print(f"  Ask ChatGPT: \"best {data['business_type']} in {data['business_city']}\" — do they appear?")
+    # GEO
+    print(f'\n  [CLIENT] GEO / AI Readiness')
+    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"]}" — does CLIENT appear?')
     data["geo_score"] = prompt("  Score", options=score_opts)
 
-    # ── Findings ───────────────────────────────────────────────────────────────
     divider("FINDINGS")
-
-    # Show auto-detected findings
     if auto_findings:
-        print("\n  Auto-detected issues (will be included automatically):")
-        for f in auto_findings:
-            print(f"    → {f}")
-
-    print("\n  Add your own findings (press Enter twice when done):")
-    manual_findings = []
+        print("\n  Auto-detected (included automatically):")
+        for f in auto_findings: print(f"    → {f}")
+    print("\n  Add your own (press Enter twice when done):")
+    manual = []
     while True:
         line = input("  > ").strip()
-        if line == "" and (not manual_findings or manual_findings[-1] == ""):
-            break
-        if line:
-            manual_findings.append(line)
+        if line == "" and (not manual or manual[-1] == ""): break
+        if line: manual.append(line)
+    data["findings"] = (auto_findings + manual)[:4]
 
-    data["findings"] = auto_findings + manual_findings
-
-    # ── Recommendations ────────────────────────────────────────────────────────
     divider("RECOMMENDATIONS")
     print("  Enter top 3 recommendations:\n")
     data["recommendations"] = []
-    for i in range(1, 4):
+    for i in range(1,4):
         r = prompt(f"  Recommendation {i}")
-        if r:
-            data["recommendations"].append(r)
+        if r: data["recommendations"].append(r)
 
-    data["auditor_name"] = prompt("\nYour name", default="Queso Ventures")
-    data["audit_date"]   = date.today().strftime("%B %d, %Y")
-
+    data["audit_date"] = date.today().strftime("%B %d, %Y")
     return data
 
-# ── PDF Builder (same as before, clean version) ───────────────────────────────
+# ─────────────────────────────────────────────
+#  LOW-LEVEL DRAWING HELPERS
+# ─────────────────────────────────────────────
+def rounded_rect(c, x, y, w, h, r=6, fill_color=None, stroke_color=None, stroke_width=0):
+    if fill_color:   c.setFillColor(fill_color)
+    if stroke_color: c.setStrokeColor(stroke_color); c.setLineWidth(stroke_width)
+    else:            c.setLineWidth(0)
+    p = c.beginPath()
+    p.moveTo(x + r, y)
+    p.lineTo(x + w - r, y)
+    p.arcTo(x + w - 2*r, y, x + w, y + 2*r, startAng=-90, extent=90)
+    p.lineTo(x + w, y + h - r)
+    p.arcTo(x + w - 2*r, y + h - 2*r, x + w, y + h, startAng=0, extent=90)
+    p.lineTo(x + r, y + h)
+    p.arcTo(x, y + h - 2*r, x + 2*r, y + h, startAng=90, extent=90)
+    p.lineTo(x, y + r)
+    p.arcTo(x, y, x + 2*r, y + 2*r, startAng=180, extent=90)
+    p.close()
+    c.drawPath(p, fill=1 if fill_color else 0, stroke=1 if stroke_color else 0)
+
+def text(c, txt, x, y, font="Helvetica", size=10, color=C_WHITE, align="left"):
+    c.setFont(font, size)
+    c.setFillColor(color)
+    if align == "center": c.drawCentredString(x, y, txt)
+    elif align == "right": c.drawRightString(x, y, txt)
+    else: c.drawString(x, y, txt)
+
+def wrap_text(c, txt, x, y, max_w, font="Helvetica", size=9, color=C_GRAY, line_h=14):
+    """Simple word-wrap text block. Returns final y."""
+    c.setFont(font, size)
+    c.setFillColor(color)
+    words = txt.split()
+    line  = ""
+    cy    = y
+    for w in words:
+        test = (line + " " + w).strip()
+        if c.stringWidth(test, font, size) <= max_w:
+            line = test
+        else:
+            c.drawString(x, cy, line)
+            cy -= line_h
+            line = w
+    if line:
+        c.drawString(x, cy, line)
+        cy -= line_h
+    return cy
+
+def pill(c, x, y, w, h, label, bg, text_color=C_BLACK, font="Helvetica-Bold", size=8):
+    rounded_rect(c, x, y, w, h, r=h//2, fill_color=bg)
+    text(c, label, x + w/2, y + h/2 - size*0.35, font=font, size=size, color=text_color, align="center")
+
+def score_pill(c, x, y, score, mx=5):
+    col = score_color(score, mx)
+    lbl = score_label(score, mx)
+    pill(c, x, y, 72, 18, lbl, bg=col, text_color=C_WHITE)
+
+def score_dots(c, x, y, score, mx=5, dot_r=5, gap=14):
+    """Draw filled/empty dots for score."""
+    for i in range(mx):
+        cx = x + i * gap
+        cy = y
+        filled = i < score
+        col = score_color(score, mx) if filled else C_LGRAY
+        c.setFillColor(col)
+        c.circle(cx, cy, dot_r, fill=1, stroke=0)
+
+# ─────────────────────────────────────────────
+#  PDF BUILD
+# ─────────────────────────────────────────────
 def build_pdf(data, output_path):
-    doc = SimpleDocTemplate(
-        output_path,
-        pagesize=letter,
-        leftMargin=0.6*inch,
-        rightMargin=0.6*inch,
-        topMargin=0.5*inch,
-        bottomMargin=0.6*inch,
-    )
+    logo_path = ensure_logo()
+    c = canvas.Canvas(output_path, pagesize=letter)
 
-    W = letter[0] - 1.2*inch
+    # ── Full-bleed background ──────────────────────────────────────────────────
+    c.setFillColor(C_BLACK)
+    c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    def style(name, **kwargs):
-        return ParagraphStyle(name, **kwargs)
+    # Top yellow bar
+    c.setFillColor(C_YELLOW)
+    c.rect(0, PAGE_H - 5, PAGE_W, 5, fill=1, stroke=0)
 
-    s_header_name = style("HN", fontSize=22, textColor=WHITE,     fontName="Helvetica-Bold", leading=26)
-    s_header_sub  = style("HS", fontSize=11, textColor=YELLOW,    fontName="Helvetica",      leading=16)
-    s_section     = style("SC", fontSize=11, textColor=DARK,      fontName="Helvetica-Bold", leading=16, spaceBefore=14)
-    s_body        = style("BD", fontSize=9,  textColor=TEXT_GRAY, fontName="Helvetica",      leading=14)
-    s_small       = style("SM", fontSize=8,  textColor=TEXT_GRAY, fontName="Helvetica",      leading=12)
-    s_footer      = style("FT", fontSize=8,  textColor=MID_GRAY,  fontName="Helvetica",      alignment=TA_CENTER)
-    s_rec_num     = style("RN", fontSize=13, textColor=YELLOW,    fontName="Helvetica-Bold", alignment=TA_CENTER)
-    s_rec_text    = style("RT", fontSize=9,  textColor=TEXT_GRAY, fontName="Helvetica",      leading=14)
-    s_cat_name    = style("CN", fontSize=9,  textColor=DARK,      fontName="Helvetica-Bold", leading=13)
+    # Bottom yellow bar
+    c.rect(0, 0, PAGE_W, 5, fill=1, stroke=0)
 
-    story = []
+    inner_w = PAGE_W - 2*PAD
+    cursor  = PAGE_H - 5  # start just below top bar
 
-    # Header
-    header_data = [[
-        Paragraph(data["business_name"], s_header_name),
-        Paragraph("QUESO VENTURES", style("QV", fontSize=10, textColor=YELLOW, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
-    ],[
-        Paragraph(f"{data['business_type']}  ·  {data['business_city']}", s_header_sub),
-        Paragraph(f"SEO & GEO Audit\n{data['audit_date']}", style("AD", fontSize=8, textColor=MID_GRAY, fontName="Helvetica", alignment=TA_RIGHT, leading=13)),
-    ]]
-    header_table = Table(header_data, colWidths=[W*0.65, W*0.35])
-    header_table.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,-1), DARK),
-        ("TOPPADDING",    (0,0), (-1,-1), 14),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 14),
-        ("LEFTPADDING",   (0,0), (-1,-1), 16),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 16),
-        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
-        ("ROUNDEDCORNERS", [6]),
-    ]))
-    story.append(header_table)
-    story.append(Spacer(1, 16))
+    # ── HEADER BLOCK ──────────────────────────────────────────────────────────
+    HDR_H = 68
+    cursor -= HDR_H
+    rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_DARK)
 
-    # Overview bar
-    total_score = sum([data[k] for k in ["website_score","speed_score","gbp_score","visibility_score","geo_score"]])
-    total_pct   = int((total_score / 25) * 100)
-    overall_col = score_color(total_score, 25)
+    # Business name (large, white)
+    c.setFont("Helvetica-Bold", 20)
+    c.setFillColor(C_WHITE)
+    c.drawString(PAD + 16, cursor + HDR_H - 30, data["business_name"])
 
-    overview_data = [[
-        Paragraph(f"<b>{total_pct}%</b>",                          style("TP", fontSize=28, textColor=WHITE,     fontName="Helvetica-Bold", alignment=TA_CENTER)),
-        Paragraph(f"<b>{data['review_rating']} ★</b>",             style("RR", fontSize=18, textColor=DARK,      fontName="Helvetica-Bold", alignment=TA_CENTER)),
-        Paragraph(f"<b>{data['review_count']}</b>",                 style("RC", fontSize=18, textColor=DARK,      fontName="Helvetica-Bold", alignment=TA_CENTER)),
-        Paragraph(f"<b>{'✓ Yes' if data['has_website'] else '✗ No'}</b>", style("WS", fontSize=16, textColor=DARK, fontName="Helvetica-Bold", alignment=TA_CENTER)),
-    ],[
-        Paragraph("Overall Score",  style("L1", fontSize=8, textColor=YELLOW,    fontName="Helvetica-Bold", alignment=TA_CENTER)),
-        Paragraph("Google Rating",  style("L2", fontSize=8, textColor=TEXT_GRAY, fontName="Helvetica",      alignment=TA_CENTER)),
-        Paragraph("Reviews",        style("L3", fontSize=8, textColor=TEXT_GRAY, fontName="Helvetica",      alignment=TA_CENTER)),
-        Paragraph("Has Website",    style("L4", fontSize=8, textColor=TEXT_GRAY, fontName="Helvetica",      alignment=TA_CENTER)),
-    ]]
-    col_w = W / 4
-    overview_table = Table(overview_data, colWidths=[col_w]*4, rowHeights=[36, 20])
-    overview_table.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (0,-1), overall_col),
-        ("BACKGROUND",    (1,0), (-1,-1), LIGHT_GRAY),
-        ("TOPPADDING",    (0,0), (-1,-1), 8),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("LEFTPADDING",   (0,0), (-1,-1), 6),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 6),
-        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
-        ("LINEAFTER",     (0,0), (2,1),   0.5, MID_GRAY),
-        ("ROUNDEDCORNERS", [4]),
-    ]))
-    story.append(overview_table)
-    story.append(Spacer(1, 18))
+    # Sub info
+    c.setFont("Helvetica", 10)
+    c.setFillColor(C_GRAY)
+    c.drawString(PAD + 16, cursor + HDR_H - 48, f"{data['business_type']}  ·  {data['business_city']}")
 
-    # Score breakdown
-    story.append(Paragraph("Score Breakdown", s_section))
-    story.append(Spacer(1, 6))
+    # Right side: logo + "QUESO VENTURES" on same line, date below
+    LOGO_H     = 20
+    LOGO_W     = 20
+    qv_text    = "QUESO VENTURES"
+    right_edge = PAD + inner_w - 16
+    row1_y     = cursor + HDR_H - 26   # brand row
+    row2_y     = cursor + HDR_H - 42   # date row
+
+    c.setFont("Helvetica-Bold", 10)
+
+    if logo_path:
+        logo_x = right_edge - LOGO_W
+        logo_y = row1_y - 5
+        c.drawImage(logo_path, logo_x, logo_y, width=LOGO_W, height=LOGO_H,
+                    preserveAspectRatio=True, mask="auto")
+        c.setFillColor(C_YELLOW)
+        c.drawRightString(logo_x - 5, row1_y, qv_text)
+    else:
+        c.setFillColor(C_YELLOW)
+        c.drawRightString(right_edge, row1_y, qv_text)
+
+    c.setFont("Helvetica", 8)
+    c.setFillColor(C_GRAY)
+    c.drawRightString(right_edge, row2_y, f"Growth Audit  ·  {data['audit_date']}")
+
+    cursor -= 10
+
+    # ── OVERALL SCORE + QUICK STATS ────────────────────────────────────────────
+    STATS_H = 62
+    cursor -= STATS_H
+    rounded_rect(c, PAD, cursor, inner_w, STATS_H, r=8, fill_color=C_DARK)
+
+    total = sum(data[k] for k in ["website_score","speed_score","gbp_score","visibility_score","geo_score"])
+    total_pct = int((total / 25) * 100)
+    ov_col = score_color(total, 25)
+
+    # Overall score left block (accent colored)
+    rounded_rect(c, PAD, cursor, 90, STATS_H, r=8, fill_color=ov_col)
+    c.setFont("Helvetica-Bold", 26)
+    c.setFillColor(C_WHITE)
+    c.drawCentredString(PAD + 45, cursor + STATS_H/2 - 9, f"{total_pct}%")
+    c.setFont("Helvetica", 7)
+    c.setFillColor(C_WHITE)
+    c.drawCentredString(PAD + 45, cursor + 9, "OVERALL SCORE")
+
+    # Stats: rating, reviews, website, speed, seo
+    seo_pct = data.get("client_seo_pct")
+    stats = [
+        (data["review_rating"] + " ★",              "Google Rating"),
+        (str(data["review_count"]),                  "Reviews"),
+        ("✓ Yes" if data["has_website"] else "✗ No", "Has Website"),
+        (pct_label(data.get("client_ps")),           "Phone Speed"),
+        (pct_label(seo_pct),                         "SEO Score"),
+    ]
+    stat_x = PAD + 100
+    stat_w = (inner_w - 106) / 5
+    for i, (val, lbl) in enumerate(stats):
+        sx = stat_x + i * stat_w
+        if lbl == "Phone Speed":
+            sc = pct_color(data.get("client_ps"))
+        elif lbl == "SEO Score":
+            sc = pct_color(seo_pct)
+        elif "✓" in val:
+            sc = C_GREEN
+        elif "✗" in val:
+            sc = C_RED
+        else:
+            sc = C_WHITE
+        c.setFont("Helvetica-Bold", 14)
+        c.setFillColor(sc)
+        c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 + 2, val)
+        c.setFont("Helvetica", 7)
+        c.setFillColor(C_GRAY)
+        c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 - 14, lbl)
+        if i < 4:
+            c.setStrokeColor(C_LGRAY)
+            c.setLineWidth(0.5)
+            c.line(sx + stat_w, cursor + 12, sx + stat_w, cursor + STATS_H - 12)
+
+    cursor -= 10
+
+    # ── SCORE BREAKDOWN + COMPETITOR (two columns) ─────────────────────────────
+    COL1_W = inner_w * 0.54
+    COL2_W = inner_w * 0.43
+    COL_GAP = inner_w * 0.03
 
     categories = [
-        ("website_score",    "Website Quality",         "Existence, clarity, mobile-ready, city+service mentions"),
-        ("speed_score",      "Mobile Page Speed",       "Google PageSpeed Insights score on mobile"),
-        ("gbp_score",        "Google Business Profile", "Photos, hours, description, services, posts"),
-        ("visibility_score", "Local Search Visibility", "Appears in top 3 map pack results"),
-        ("geo_score",        "GEO / AI Readiness",      "Appears in ChatGPT / Perplexity results"),
+        ("website_score",    "Website Quality",         "Does it load? Does it say what you do & where?"),
+        ("speed_score",      "Phone Load Speed",       "How fast your site loads on a phone"),
+        ("gbp_score",        "Google Listing", "Is your Google listing complete?"),
+        ("visibility_score", "Google Maps Visibility", "Do customers find you on Google Maps?"),
+        ("geo_score",        "AI Search Visibility",      "Do AI assistants recommend you?"),
     ]
 
+    ROW_H   = 38
+    SEC_LBL = 16
+    BREAK_H = 8
+    COL1_CONTENT_H = SEC_LBL + BREAK_H + len(categories) * (ROW_H + 3) - 3
+
+    # Competitor section height
+    COMP_ROWS   = 6   # header + 5 data rows
+    COMP_ROW_H  = 24
+    COL2_CONTENT_H = SEC_LBL + BREAK_H + COMP_ROW_H + (COMP_ROWS - 1) * COMP_ROW_H + 24  # +24 for name caption below
+
+    COL_H = max(COL1_CONTENT_H, COL2_CONTENT_H) + 16
+
+    cursor -= COL_H
+
+    # ── Left column: Score breakdown ──
+    lx = PAD
+    ly = cursor
+    # Section label
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(C_YELLOW)
+    c.drawString(lx, ly + COL_H - SEC_LBL, "SCORE BREAKDOWN")
+
+    row_y = ly + COL_H - SEC_LBL - BREAK_H - ROW_H
     for key, name, note in categories:
-        sc       = data[key]
-        sc_color = score_color(sc)
-        sc_text  = score_label(sc)
+        sc = data[key]
+        col = score_color(sc)
+        lbl = score_label(sc)
 
-        bar_cells = []
-        for i in range(1, 6):
-            bar_cells.append(
-                Table([[" "]], colWidths=[W*0.07], rowHeights=[10],
-                      style=TableStyle([("BACKGROUND",(0,0),(0,0), sc_color if i <= sc else MID_GRAY)]))
-            )
+        # Row card
+        rounded_rect(c, lx, row_y, COL1_W, ROW_H, r=6, fill_color=C_DARK)
 
-        row = Table([[
-            Paragraph(f"<b>{name}</b><br/><font size='7' color='#999999'>{note}</font>", s_cat_name),
-            Table([bar_cells], colWidths=[W*0.07]*5, rowHeights=[10]),
-            Paragraph(f"<b>{sc}/5</b>", style(f"SC{key}", fontSize=11, textColor=sc_color, fontName="Helvetica-Bold", alignment=TA_CENTER)),
-            Paragraph(sc_text, style(f"SL{key}", fontSize=8, textColor=sc_color, fontName="Helvetica-Bold")),
-        ]], colWidths=[W*0.38, W*0.38, W*0.12, W*0.12])
-        row.setStyle(TableStyle([
-            ("BACKGROUND",    (0,0), (-1,-1), WHITE),
-            ("TOPPADDING",    (0,0), (-1,-1), 9),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 9),
-            ("LEFTPADDING",   (0,0), (-1,-1), 10),
-            ("RIGHTPADDING",  (0,0), (-1,-1), 10),
-            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
-            ("BOX",           (0,0), (-1,-1), 0.5, MID_GRAY),
-            ("ROUNDEDCORNERS", [4]),
-        ]))
-        story.append(row)
-        story.append(Spacer(1, 5))
+        # Score dot cluster (left side of card)
+        score_dots(c, lx + 14, row_y + ROW_H/2, sc, dot_r=4, gap=11)
 
-    story.append(Spacer(1, 10))
+        # Name + note
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(C_WHITE)
+        c.drawString(lx + 80, row_y + ROW_H/2 + 3, name)
+        c.setFont("Helvetica", 7)
+        c.setFillColor(C_GRAY)
+        c.drawString(lx + 80, row_y + ROW_H/2 - 9, note)
 
-    # Competitor table
-    story.append(Paragraph("Competitor Comparison", s_section))
-    story.append(Spacer(1, 6))
+        # Score pill (right)
+        pill_w = 68
+        pill_h = 16
+        pill_x = lx + COL1_W - pill_w - 10
+        pill_y = row_y + (ROW_H - pill_h) / 2
+        rounded_rect(c, pill_x, pill_y, pill_w, pill_h, r=8, fill_color=col)
+        c.setFont("Helvetica-Bold", 8)
+        c.setFillColor(C_WHITE)
+        c.drawCentredString(pill_x + pill_w/2, pill_y + pill_h/2 - 3.5, lbl)
 
-    comp_rows = [
-        ["", f"<b>{data['business_name']}</b>",    f"<b>{data['comp_name']}</b>"],
-        ["Google Rating",  data["review_rating"],   data["comp_rating"]],
-        ["Review Count",   data["review_count"],    data["comp_reviews"]],
-        ["Has Website",    "Yes" if data["has_website"] else "No", "Yes" if data["comp_has_site"] else "No"],
+        row_y -= (ROW_H + 3)
+
+    # ── Right column: Competitor ──
+    cx = PAD + COL1_W + COL_GAP
+    cy = cursor
+
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(C_YELLOW)
+    c.drawString(cx, cy + COL_H - SEC_LBL, "VS. TOP COMPETITOR")
+
+    # Header row — 3 cols: label | You | Them
+    COMP_HDR_H = 24
+    tbl_y = cy + COL_H - SEC_LBL - BREAK_H - COMP_HDR_H
+    rounded_rect(c, cx, tbl_y, COL2_W, COMP_HDR_H, r=6, fill_color=C_YELLOW)
+
+    cw = COL2_W / 3
+    for i, lbl in enumerate(["", "You", "Them"]):
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(C_BLACK)
+        c.drawCentredString(cx + (i + 0.5) * cw, tbl_y + COMP_HDR_H/2 - 3.5, lbl)
+
+    comp_rows_data = [
+        ("Rating",      str(data["review_rating"]),               str(data["comp_rating"])),
+        ("Reviews",     str(data["review_count"]),                str(data["comp_reviews"])),
+        ("Website",     "Yes" if data["has_website"] else "No",   "Yes" if data["comp_has_site"] else "No"),
+        ("Phone Speed", pct_label(data.get("client_ps")),         pct_label(data.get("comp_ps"))),
+        ("SEO Score",   pct_label(data.get("client_seo_pct")),    pct_label(data.get("comp_seo_pct"))),
     ]
 
-    comp_table_data = []
-    for i, row in enumerate(comp_rows):
-        comp_table_data.append([
-            Paragraph(row[0], s_small if i > 0 else s_small),
-            Paragraph(row[1], style(f"CT1{i}", fontSize=9, textColor=DARK, fontName="Helvetica-Bold" if i==0 else "Helvetica", alignment=TA_CENTER)),
-            Paragraph(row[2], style(f"CT2{i}", fontSize=9, textColor=DARK, fontName="Helvetica-Bold" if i==0 else "Helvetica", alignment=TA_CENTER)),
-        ])
+    dr_y = tbl_y - COMP_ROW_H
+    for ri, (label, v1, v2) in enumerate(comp_rows_data):
+        is_last = ri == len(comp_rows_data) - 1
+        bg = C_DARK if ri % 2 == 0 else C_LGRAY
 
-    comp_table = Table(comp_table_data, colWidths=[W*0.35, W*0.325, W*0.325])
-    comp_table.setStyle(TableStyle([
-        ("BACKGROUND",     (0,0), (-1,0),  DARK),
-        ("TEXTCOLOR",      (0,0), (-1,0),  WHITE),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [WHITE, LIGHT_GRAY]),
-        ("BACKGROUND",     (1,1), (1,-1),  WHITE),
-        ("TOPPADDING",     (0,0), (-1,-1), 8),
-        ("BOTTOMPADDING",  (0,0), (-1,-1), 8),
-        ("LEFTPADDING",    (0,0), (-1,-1), 10),
-        ("RIGHTPADDING",   (0,0), (-1,-1), 10),
-        ("VALIGN",         (0,0), (-1,-1), "MIDDLE"),
-        ("LINEAFTER",      (0,0), (1,-1),  0.5, MID_GRAY),
-        ("BOX",            (0,0), (-1,-1), 0.5, MID_GRAY),
-        ("ROUNDEDCORNERS", [4]),
-    ]))
-    story.append(comp_table)
-    story.append(Spacer(1, 18))
+        if is_last:
+            # Use roundRect for the last row to get rounded bottom corners
+            c.setFillColor(bg)
+            c.roundRect(cx, dr_y, COL2_W, COMP_ROW_H, 6, fill=1, stroke=0)
+            # Square off the top of this rounded rect
+            c.rect(cx, dr_y + COMP_ROW_H/2, COL2_W, COMP_ROW_H/2, fill=1, stroke=0)
+        else:
+            rounded_rect(c, cx, dr_y, COL2_W, COMP_ROW_H, r=0, fill_color=bg)
 
-    # Findings
+        c.setFont("Helvetica", 8)
+        c.setFillColor(C_GRAY)
+        c.drawString(cx + 8, dr_y + COMP_ROW_H/2 - 3.5, label)
+
+        # Color-code percentage rows
+        if label in ("Phone Speed", "SEO Score"):
+            try: v1_col = pct_color(int(v1.replace("/100","")))
+            except: v1_col = C_WHITE
+            try: v2_col = pct_color(int(v2.replace("/100","")))
+            except: v2_col = C_WHITE
+        else:
+            v1_col = v2_col = C_WHITE
+
+        c.setFont("Helvetica-Bold", 8)
+        c.setFillColor(v1_col)
+        c.drawCentredString(cx + cw * 1.5, dr_y + COMP_ROW_H/2 - 3.5, v1)
+        c.setFillColor(v2_col)
+        c.drawCentredString(cx + cw * 2.5, dr_y + COMP_ROW_H/2 - 3.5, v2)
+
+        dr_y -= COMP_ROW_H
+
+    # Competitor name caption below table — left aligned, truncated to fit
+    caption = f"* Them = {data['comp_name']}"
+    c.setFont("Helvetica", 7)
+    while c.stringWidth(caption, "Helvetica", 7) > COL2_W and len(caption) > 12:
+        caption = caption[:-2]
+    if not caption.endswith(data['comp_name']):
+        caption = caption.rstrip() + "…"
+    c.setFillColor(C_GRAY)
+    c.drawString(cx, dr_y - 2, caption)
+
+    cursor -= 10
+
+    # ── FINDINGS ──────────────────────────────────────────────────────────────
     if data["findings"]:
-        story.append(Paragraph("Key Findings", s_section))
-        story.append(Spacer(1, 6))
-        for finding in data["findings"]:
-            row = Table([[
-                Paragraph("→", style("AR", fontSize=10, textColor=YELLOW, fontName="Helvetica-Bold")),
-                Paragraph(finding, s_body),
-            ]], colWidths=[0.25*inch, W - 0.25*inch])
-            row.setStyle(TableStyle([
-                ("VALIGN",        (0,0), (-1,-1), "TOP"),
-                ("TOPPADDING",    (0,0), (-1,-1), 3),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-            ]))
-            story.append(row)
-        story.append(Spacer(1, 14))
+        cursor -= 8
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(C_YELLOW)
+        c.drawString(PAD, cursor, "WHAT'S WRONG")
+        cursor -= 6
 
-    # Recommendations
+        # Core Web Vitals pills — only show if Google has real user data for this site
+        cwv = data.get("client_cwv", {})
+        has_cwv_data = cwv and any(
+            m.get("rating", "N/A") != "N/A"
+            for m in cwv.values()
+        )
+        if has_cwv_data:
+            CWV_LABELS     = {"lcp": "Page Load", "fid": "Response Time", "cls": "Visual Stability"}
+            RATING_DISPLAY = {"FAST": "Good", "AVERAGE": "Fair", "SLOW": "Slow", "N/A": "N/A"}
+            RATING_COL     = {"FAST": C_GREEN, "AVERAGE": C_ORANGE, "SLOW": C_RED, "N/A": C_GRAY}
+            PILL_H   = 20
+            PILL_PAD = 8
+            GAP      = 8
+            cursor  -= PILL_H + 6
+
+            px = PAD
+            for key, lbl_text in CWV_LABELS.items():
+                metric      = cwv.get(key, {})
+                rating      = metric.get("rating", "N/A")
+                rating_disp = RATING_DISPLAY.get(rating, rating)
+                col         = RATING_COL.get(rating, C_GRAY)
+
+                lbl_w    = c.stringWidth(lbl_text,    "Helvetica-Bold", 7)
+                rating_w = c.stringWidth(rating_disp, "Helvetica-Bold", 7)
+                pill_w   = PILL_PAD + lbl_w + GAP + rating_w + PILL_PAD
+
+                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_LGRAY)
+
+                c.setFont("Helvetica-Bold", 7)
+                c.setFillColor(C_WHITE)
+                c.drawString(px + PILL_PAD, cursor + PILL_H/2 - 3.5, lbl_text)
+
+                badge_x = px + PILL_PAD + lbl_w + GAP
+                badge_w = rating_w + PILL_PAD
+                rounded_rect(c, badge_x - 4, cursor + 3, badge_w + 4, PILL_H - 6, r=5, fill_color=col)
+                c.setFont("Helvetica-Bold", 7)
+                c.setFillColor(C_WHITE)
+                c.drawString(badge_x, cursor + PILL_H/2 - 3.5, rating_disp)
+
+                px += pill_w + 8
+
+        for finding in data["findings"][:4]:
+            # Estimate height needed
+            words   = finding.split()
+            chars   = sum(len(w)+1 for w in words)
+            lines   = max(1, int(chars * 7.5 / (inner_w - 60)) + 1)
+            fnd_h   = max(28, lines * 13 + 10)
+
+            cursor -= fnd_h
+            rounded_rect(c, PAD, cursor, inner_w, fnd_h, r=6, fill_color=C_DARK)
+
+            # Red left accent
+            c.setFillColor(C_RED)
+            c.roundRect(PAD, cursor, 4, fnd_h, 2, fill=1, stroke=0)
+
+            # Arrow
+            c.setFont("Helvetica-Bold", 10)
+            c.setFillColor(C_RED)
+            c.drawString(PAD + 12, cursor + fnd_h/2 - 4, "!")
+
+            # Text
+            wrap_text(c, finding, PAD + 30, cursor + fnd_h - 11,
+                      inner_w - 44, font="Helvetica", size=8.5,
+                      color=C_WHITE, line_h=13)
+            cursor -= 4
+
+    # ── RECOMMENDATIONS ────────────────────────────────────────────────────────
     if data["recommendations"]:
-        story.append(Paragraph("Top Recommendations", s_section))
-        story.append(Spacer(1, 8))
+        cursor -= 10
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(C_YELLOW)
+        c.drawString(PAD, cursor, "WHAT TO DO NEXT")
+        cursor -= 8
 
-        rec_cells = []
-        n = len(data["recommendations"])
-        for i, rec in enumerate(data["recommendations"], 1):
-            cell = Table([[Paragraph(str(i), s_rec_num)],[Paragraph(rec, s_rec_text)]],
-                         colWidths=[(W/n) - 8])
-            cell.setStyle(TableStyle([
-                ("BACKGROUND",    (0,0), (0,0), DARK),
-                ("BACKGROUND",    (0,1), (0,1), LIGHT_GRAY),
-                ("TOPPADDING",    (0,0), (-1,-1), 10),
-                ("BOTTOMPADDING", (0,0), (-1,-1), 10),
-                ("LEFTPADDING",   (0,0), (-1,-1), 10),
-                ("RIGHTPADDING",  (0,0), (-1,-1), 10),
-                ("ROUNDEDCORNERS", [4]),
-            ]))
-            rec_cells.append(cell)
+        n     = len(data["recommendations"])
+        rec_w = (inner_w - (n-1)*6) / n
 
-        rec_row = Table([rec_cells], colWidths=[(W/n) - 4]*n)
-        rec_row.setStyle(TableStyle([
-            ("LEFTPADDING",  (0,0), (-1,-1), 4),
-            ("RIGHTPADDING", (0,0), (-1,-1), 4),
-        ]))
-        story.append(rec_row)
-        story.append(Spacer(1, 20))
+        for i, rec in enumerate(data["recommendations"]):
+            rx = PAD + i * (rec_w + 6)
 
-    # Footer
-    story.append(HRFlowable(width=W, thickness=0.5, color=MID_GRAY))
-    story.append(Spacer(1, 8))
-    story.append(Paragraph(
-        f"Prepared by {data['auditor_name']}  ·  quesoventures.com  ·  {data['audit_date']}  ·  Confidential",
-        s_footer
-    ))
+            words = rec.split()
+            chars = sum(len(w)+1 for w in words)
+            lines = max(1, int(chars * 7.5 / (rec_w - 24)) + 1)
+            rec_h = max(52, lines * 13 + 30)
 
-    doc.build(story)
+        # Use max height for consistent cards
+        words_all = [r.split() for r in data["recommendations"]]
+        max_lines = max(max(1, int(sum(len(w)+1 for w in ws) * 7.5 / (rec_w - 24)) + 1)
+                        for ws in words_all)
+        rec_h = max(70, max_lines * 13 + 48)
+        cursor -= rec_h
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+        for i, rec in enumerate(data["recommendations"]):
+            rx = PAD + i * (rec_w + 6)
+            rounded_rect(c, rx, cursor, rec_w, rec_h, r=8, fill_color=C_DARK)
+
+            # Number badge (yellow top section)
+            badge_h = 28
+            rounded_rect(c, rx, cursor + rec_h - badge_h, rec_w, badge_h, r=8, fill_color=C_YELLOW)
+            # Square off bottom of badge so it joins the card cleanly
+            c.setFillColor(C_YELLOW)
+            c.rect(rx, cursor + rec_h - badge_h, rec_w, badge_h/2, fill=1, stroke=0)
+
+            c.setFont("Helvetica-Bold", 14)
+            c.setFillColor(C_BLACK)
+            c.drawCentredString(rx + rec_w/2, cursor + rec_h - 19, str(i+1))
+
+            # Text starts with generous top padding below the badge
+            text_top = cursor + rec_h - badge_h - 14
+            wrap_text(c, rec, rx + 12, text_top,
+                      rec_w - 24, font="Helvetica", size=8.5,
+                      color=C_GRAY, line_h=13)
+
+        cursor -= 8
+
+    # ── FOOTER ────────────────────────────────────────────────────────────────
+    c.setStrokeColor(C_LGRAY)
+    c.setLineWidth(0.5)
+    c.line(PAD, 18, PAGE_W - PAD, 18)
+    c.setFont("Helvetica", 7)
+    c.setFillColor(C_GRAY)
+    c.drawCentredString(PAGE_W/2, 8,
+        f"Prepared by {AUDITOR}  ·  {SITE_URL}  ·  {data['audit_date']}  ·  Confidential")
+
+    c.save()
+
+# ─────────────────────────────────────────────
+#  COLLECT + BUILD
+# ─────────────────────────────────────────────
 def main():
     data = collect_data()
-
-    safe_name = data["business_name"].replace(" ", "_").replace("/", "-").lower()
-    filename  = f"audit_{safe_name}_{date.today().strftime('%Y%m%d')}.pdf"
-
+    safe = data["business_name"].replace(" ","_").replace("/","-").lower()
+    fn   = f"audit_{safe}_{date.today().strftime('%Y%m%d')}.pdf"
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    output  = os.path.join(desktop if os.path.exists(desktop) else os.getcwd(), filename)
-
-    print(f"\n  Generating PDF...", end=" ", flush=True)
-    build_pdf(data, output)
-    print(f"done.")
-    print(f"\n  ✓ Saved to: {output}\n")
+    out = os.path.join(desktop if os.path.exists(desktop) else os.getcwd(), fn)
+    print(f"\n  Building PDF...", end=" ", flush=True)
+    build_pdf(data, out)
+    print("done.")
+    print(f"\n  ✓ Saved: {out}\n")
 
 if __name__ == "__main__":
     main()
