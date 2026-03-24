@@ -16,25 +16,28 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 # ─────────────────────────────────────────────
-#  BRAND
+#  BRAND — light / print-friendly
 # ─────────────────────────────────────────────
-C_BLACK  = colors.HexColor("#0A0C10")   # near-black bg
-C_DARK   = colors.HexColor("#12161E")   # card bg
-C_YELLOW = colors.HexColor("#FFD100")   # primary accent
+C_BLACK  = colors.HexColor("#1A1A1A")   # primary text
+C_DARK   = colors.HexColor("#F5F5F3")   # card bg (very light gray)
+C_YELLOW = colors.HexColor("#FFD100")   # yellow accent (used sparingly)
 C_WHITE  = colors.HexColor("#FFFFFF")
-C_GRAY   = colors.HexColor("#8A909C")   # muted text
-C_LGRAY  = colors.HexColor("#1E2330")   # subtle card
-C_RED    = colors.HexColor("#E03535")
-C_ORANGE = colors.HexColor("#F5A623")
-C_GREEN  = colors.HexColor("#27AE60")
+C_GRAY   = colors.HexColor("#666666")   # muted text
+C_LGRAY  = colors.HexColor("#E8E8E5")   # subtle card / dividers
+C_RED    = colors.HexColor("#C4161C")   # primary accent (Queso red)
+C_ORANGE = colors.HexColor("#D4720A")
+C_GREEN  = colors.HexColor("#1E7D3E")
+C_PAGE   = colors.HexColor("#FFFFFF")   # page background
 
 PAGE_W, PAGE_H = letter   # 612 x 792
 PAD = 40                  # outer padding
 
-AUDITOR   = "Queso Ventures"
-SITE_URL  = "quesoventures.com"
-LOGO_URL  = "https://www.quesoventures.com/logo.png"
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qv_logo.png")
+AUDITOR      = "Queso Ventures"
+SITE_URL     = "quesoventures.com"
+CONTACT_EMAIL= "hello@quesoventures.com"
+CONTACT_PHONE= "(281) 203-4531"
+LOGO_URL     = "https://www.quesoventures.com/logo.png"
+LOGO_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qv_logo.png")
 
 def ensure_logo():
     """Download logo once and cache it next to the script."""
@@ -271,6 +274,7 @@ def collect_data():
         if confirm == "y": exists = True; html = None
     data["has_website"] = exists
     seo = seo_check(html, data["business_city"], data["business_type"]) if html else {}
+    data["_seo"] = seo  # stash for recommendation engine
     ws_score, ws_issues = auto_site_score(exists, seo)
     auto_findings.extend(ws_issues)
 
@@ -385,15 +389,84 @@ def collect_data():
         if line: manual.append(line)
     data["findings"] = (auto_findings + manual)[:4]
 
+    # Auto-generate recommendations
+    auto_recs = auto_recommendations(data, auto_findings + manual)
     divider("RECOMMENDATIONS")
-    print("  Enter top 3 recommendations:\n")
-    data["recommendations"] = []
-    for i in range(1,4):
-        r = prompt(f"  Recommendation {i}")
-        if r: data["recommendations"].append(r)
+    print("\n  Auto-generated recommendations (based on findings):")
+    for i, r in enumerate(auto_recs, 1):
+        print(f"    {i}. {r}")
+    print("\n  Override any? (press Enter to keep, or type replacement)")
+    final_recs = list(auto_recs)
+    for i in range(len(final_recs)):
+        override = input(f"  [{i+1}] override (Enter to keep): ").strip()
+        if override:
+            final_recs[i] = override
+    print("\n  Add an extra recommendation? (Enter to skip)")
+    extra = input("  > ").strip()
+    if extra:
+        final_recs.append(extra)
+    data["recommendations"] = final_recs[:3]
 
     data["audit_date"] = date.today().strftime("%B %d, %Y")
     return data
+
+def auto_recommendations(data, findings):
+    """Generate tailored recommendations based on what was found."""
+    recs = []
+
+    seo = data.get("_seo", {})
+    exists = data.get("has_website", False)
+    ps = data.get("client_ps")
+    seo_pct = data.get("client_seo_pct")
+    gbp = data.get("gbp_score", 3)
+    vis = data.get("visibility_score", 3)
+    geo = data.get("geo_score", 3)
+
+    if not exists:
+        recs.append("Get a simple website up — even a one-page site puts you on the map for customers searching online. Right now you're invisible to anyone who doesn't already know you.")
+    else:
+        if not seo.get("city_in_title") or not seo.get("city_in_h1"):
+            recs.append(f"Add '{data['business_city'].split(',')[0].strip()}' to your page title and main headline so Google knows exactly where you serve customers.")
+        if not seo.get("service_mentioned"):
+            recs.append(f"Make it obvious on your homepage what you do — Google and customers shouldn't have to guess you're a {data['business_type']}.")
+        if ps is not None and ps < 70:
+            recs.append(f"Speed up your site on mobile — it scores {ps}/100 right now. Most of your customers search on their phone, and a slow site means they leave before they even see you.")
+        if seo_pct is not None and seo_pct < 80:
+            recs.append("Fix the technical issues Google flagged on your site — these are invisible to visitors but they quietly hurt where you rank in search results.")
+        if not seo.get("has_phone"):
+            recs.append("Put your phone number on your website where people can see it. If someone has to search for how to call you, most of them won't bother.")
+
+    if gbp <= 2:
+        recs.append("Fill out your Google Business listing completely — add photos, your hours, a description of what you do, and the services you offer. It's free and it's one of the fastest ways to show up higher on Google Maps.")
+    elif gbp == 3:
+        recs.append("Your Google listing is set up but not fully optimized. Adding recent photos and responding to reviews can bump you up in local search results quickly.")
+
+    if vis <= 2:
+        recs.append(f"Right now you're not showing up when someone searches for '{data['business_type']} in {data['business_city'].split(',')[0].strip()}' on Google Maps. That's your highest-intent customer — they're ready to call someone. Let's make sure that someone is you.")
+
+    if geo <= 2:
+        recs.append("AI tools like ChatGPT are starting to recommend local businesses by name. You're not showing up yet — getting your online presence in order now puts you ahead of competitors who haven't figured this out.")
+
+    # Always include a review nudge if reviews are low
+    try:
+        rev_count = int(data.get("review_count", 0))
+        comp_rev  = int(data.get("comp_reviews", 0))
+        if rev_count < 20 or (comp_rev > 0 and rev_count < comp_rev * 0.5):
+            recs.append(f"Ask your happy customers to leave a Google review. {data['comp_name']} has {data.get('comp_reviews', '?')} reviews — more reviews means Google shows you first more often.")
+    except (ValueError, TypeError):
+        pass
+
+    # Deduplicate and cap at 3
+    seen, final = set(), []
+    for r in recs:
+        key = r[:40]
+        if key not in seen:
+            seen.add(key)
+            final.append(r)
+        if len(final) == 3:
+            break
+
+    return final
 
 # ─────────────────────────────────────────────
 #  LOW-LEVEL DRAWING HELPERS
@@ -468,28 +541,25 @@ def build_pdf(data, output_path):
     logo_path = ensure_logo()
     c = canvas.Canvas(output_path, pagesize=letter)
 
-    # ── Full-bleed background ──────────────────────────────────────────────────
-    c.setFillColor(C_BLACK)
+    # ── White page background ──────────────────────────────────────────────────
+    c.setFillColor(C_PAGE)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # Top yellow bar
-    c.setFillColor(C_YELLOW)
-    c.rect(0, PAGE_H - 5, PAGE_W, 5, fill=1, stroke=0)
-
-    # Bottom yellow bar
-    c.rect(0, 0, PAGE_W, 5, fill=1, stroke=0)
+    # Thin top bar — just a single clean line in dark gray
+    c.setFillColor(C_BLACK)
+    c.rect(0, PAGE_H - 3, PAGE_W, 3, fill=1, stroke=0)
 
     inner_w = PAGE_W - 2*PAD
-    cursor  = PAGE_H - 5  # start just below top bar
+    cursor  = PAGE_H - 3  # start just below top bar
 
     # ── HEADER BLOCK ──────────────────────────────────────────────────────────
     HDR_H = 68
     cursor -= HDR_H
     rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_DARK)
 
-    # Business name (large, white)
+    # Business name (large, dark)
     c.setFont("Helvetica-Bold", 20)
-    c.setFillColor(C_WHITE)
+    c.setFillColor(C_BLACK)
     c.drawString(PAD + 16, cursor + HDR_H - 30, data["business_name"])
 
     # Sub info
@@ -497,30 +567,32 @@ def build_pdf(data, output_path):
     c.setFillColor(C_GRAY)
     c.drawString(PAD + 16, cursor + HDR_H - 48, f"{data['business_type']}  ·  {data['business_city']}")
 
-    # Right side: logo + "QUESO VENTURES" on same line, date below
-    LOGO_H     = 20
-    LOGO_W     = 20
-    qv_text    = "QUESO VENTURES"
+    # Right side: "QUESO VENTURES" + doc type + date
     right_edge = PAD + inner_w - 16
-    row1_y     = cursor + HDR_H - 26   # brand row
-    row2_y     = cursor + HDR_H - 42   # date row
+    row1_y     = cursor + HDR_H - 26
+    row2_y     = cursor + HDR_H - 42
 
     c.setFont("Helvetica-Bold", 10)
+    qv_label = "Queso Ventures"
+    qv_w = c.stringWidth(qv_label, "Helvetica-Bold", 10)
 
     if logo_path:
-        logo_x = right_edge - LOGO_W
-        logo_y = row1_y - 5
-        c.drawImage(logo_path, logo_x, logo_y, width=LOGO_W, height=LOGO_H,
+        LOGO_H = 14; LOGO_W = 14
+        # Total width of logo + gap + text
+        total_brand_w = LOGO_W + 5 + qv_w
+        brand_x = right_edge - total_brand_w
+        logo_y  = row1_y - 3
+        c.drawImage(logo_path, brand_x, logo_y, width=LOGO_W, height=LOGO_H,
                     preserveAspectRatio=True, mask="auto")
-        c.setFillColor(C_YELLOW)
-        c.drawRightString(logo_x - 5, row1_y, qv_text)
+        c.setFillColor(C_BLACK)
+        c.drawString(brand_x + LOGO_W + 5, row1_y, qv_label)
     else:
-        c.setFillColor(C_YELLOW)
-        c.drawRightString(right_edge, row1_y, qv_text)
+        c.setFillColor(C_BLACK)
+        c.drawRightString(right_edge, row1_y, qv_label)
 
     c.setFont("Helvetica", 8)
     c.setFillColor(C_GRAY)
-    c.drawRightString(right_edge, row2_y, f"Growth Audit  ·  {data['audit_date']}")
+    c.drawRightString(right_edge, row2_y, f"Visibility Report  ·  {data['audit_date']}")
 
     cursor -= 10
 
@@ -533,14 +605,16 @@ def build_pdf(data, output_path):
     total_pct = int((total / 25) * 100)
     ov_col = score_color(total, 25)
 
-    # Overall score left block (accent colored)
-    rounded_rect(c, PAD, cursor, 90, STATS_H, r=8, fill_color=ov_col)
+    # Overall score left block — outlined, no fill, saves ink
+    c.setStrokeColor(ov_col)
+    c.setLineWidth(2)
+    c.roundRect(PAD + 2, cursor + 2, 86, STATS_H - 4, 6, fill=0, stroke=1)
     c.setFont("Helvetica-Bold", 26)
-    c.setFillColor(C_WHITE)
+    c.setFillColor(ov_col)
     c.drawCentredString(PAD + 45, cursor + STATS_H/2 - 9, f"{total_pct}%")
     c.setFont("Helvetica", 7)
-    c.setFillColor(C_WHITE)
-    c.drawCentredString(PAD + 45, cursor + 9, "OVERALL SCORE")
+    c.setFillColor(C_GRAY)
+    c.drawCentredString(PAD + 45, cursor + 9, "Visibility Score")
 
     # Stats: rating, reviews, website, speed, seo
     seo_pct = data.get("client_seo_pct")
@@ -564,7 +638,7 @@ def build_pdf(data, output_path):
         elif "✗" in val:
             sc = C_RED
         else:
-            sc = C_WHITE
+            sc = C_BLACK   # rating and reviews — dark, readable on light card
         c.setFont("Helvetica-Bold", 14)
         c.setFillColor(sc)
         c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 + 2, val)
@@ -584,11 +658,11 @@ def build_pdf(data, output_path):
     COL_GAP = inner_w * 0.03
 
     categories = [
-        ("website_score",    "Website Quality",         "Does it load? Does it say what you do & where?"),
-        ("speed_score",      "Phone Load Speed",       "How fast your site loads on a phone"),
-        ("gbp_score",        "Google Listing", "Is your Google listing complete?"),
-        ("visibility_score", "Google Maps Visibility", "Do customers find you on Google Maps?"),
-        ("geo_score",        "AI Search Visibility",      "Do AI assistants recommend you?"),
+        ("website_score",    "Website",                 "Does it load? Does it say what you do & where?"),
+        ("speed_score",      "Mobile Speed",            "How fast your site loads on a phone"),
+        ("gbp_score",        "Google Listing",          "Is your Google Business profile complete?"),
+        ("visibility_score", "Google Maps",             "Do customers find you when they search locally?"),
+        ("geo_score",        "AI Search",               "Do AI tools like ChatGPT recommend you?"),
     ]
 
     ROW_H   = 38
@@ -610,14 +684,12 @@ def build_pdf(data, output_path):
     ly = cursor
     # Section label
     c.setFont("Helvetica-Bold", 9)
-    c.setFillColor(C_YELLOW)
-    c.drawString(lx, ly + COL_H - SEC_LBL, "SCORE BREAKDOWN")
+    c.setFillColor(C_GRAY)
+    c.drawString(lx, ly + COL_H - SEC_LBL, "VISIBILITY BREAKDOWN")
 
     row_y = ly + COL_H - SEC_LBL - BREAK_H - ROW_H
     for key, name, note in categories:
         sc = data[key]
-        col = score_color(sc)
-        lbl = score_label(sc)
 
         # Row card
         rounded_rect(c, lx, row_y, COL1_W, ROW_H, r=6, fill_color=C_DARK)
@@ -625,23 +697,13 @@ def build_pdf(data, output_path):
         # Score dot cluster (left side of card)
         score_dots(c, lx + 14, row_y + ROW_H/2, sc, dot_r=4, gap=11)
 
-        # Name + note
+        # Name + note — shifted right to avoid dot overlap
         c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(C_WHITE)
-        c.drawString(lx + 80, row_y + ROW_H/2 + 3, name)
+        c.setFillColor(C_BLACK)
+        c.drawString(lx + 75, row_y + ROW_H/2 + 3, name)
         c.setFont("Helvetica", 7)
         c.setFillColor(C_GRAY)
-        c.drawString(lx + 80, row_y + ROW_H/2 - 9, note)
-
-        # Score pill (right)
-        pill_w = 68
-        pill_h = 16
-        pill_x = lx + COL1_W - pill_w - 10
-        pill_y = row_y + (ROW_H - pill_h) / 2
-        rounded_rect(c, pill_x, pill_y, pill_w, pill_h, r=8, fill_color=col)
-        c.setFont("Helvetica-Bold", 8)
-        c.setFillColor(C_WHITE)
-        c.drawCentredString(pill_x + pill_w/2, pill_y + pill_h/2 - 3.5, lbl)
+        c.drawString(lx + 75, row_y + ROW_H/2 - 9, note)
 
         row_y -= (ROW_H + 3)
 
@@ -650,13 +712,13 @@ def build_pdf(data, output_path):
     cy = cursor
 
     c.setFont("Helvetica-Bold", 9)
-    c.setFillColor(C_YELLOW)
-    c.drawString(cx, cy + COL_H - SEC_LBL, "VS. TOP COMPETITOR")
+    c.setFillColor(C_GRAY)
+    c.drawString(cx, cy + COL_H - SEC_LBL, "VS. COMPETITOR")
 
-    # Header row — 3 cols: label | You | Them
+    # Header row — light gray fill, dark text (ink-friendly, readable)
     COMP_HDR_H = 24
     tbl_y = cy + COL_H - SEC_LBL - BREAK_H - COMP_HDR_H
-    rounded_rect(c, cx, tbl_y, COL2_W, COMP_HDR_H, r=6, fill_color=C_YELLOW)
+    rounded_rect(c, cx, tbl_y, COL2_W, COMP_HDR_H, r=6, fill_color=C_LGRAY)
 
     cw = COL2_W / 3
     for i, lbl in enumerate(["", "You", "Them"]):
@@ -693,11 +755,11 @@ def build_pdf(data, output_path):
         # Color-code percentage rows
         if label in ("Phone Speed", "SEO Score"):
             try: v1_col = pct_color(int(v1.replace("/100","")))
-            except: v1_col = C_WHITE
+            except: v1_col = C_BLACK
             try: v2_col = pct_color(int(v2.replace("/100","")))
-            except: v2_col = C_WHITE
+            except: v2_col = C_BLACK
         else:
-            v1_col = v2_col = C_WHITE
+            v1_col = v2_col = C_BLACK
 
         c.setFont("Helvetica-Bold", 8)
         c.setFillColor(v1_col)
@@ -723,11 +785,11 @@ def build_pdf(data, output_path):
     if data["findings"]:
         cursor -= 8
         c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(C_YELLOW)
-        c.drawString(PAD, cursor, "WHAT'S WRONG")
+        c.setFillColor(C_GRAY)
+        c.drawString(PAD, cursor, "WHAT WE FOUND")
         cursor -= 6
 
-        # Core Web Vitals pills — only show if Google has real user data for this site
+        # Core Web Vitals pills
         cwv = data.get("client_cwv", {})
         has_cwv_data = cwv and any(
             m.get("rating", "N/A") != "N/A"
@@ -753,10 +815,10 @@ def build_pdf(data, output_path):
                 rating_w = c.stringWidth(rating_disp, "Helvetica-Bold", 7)
                 pill_w   = PILL_PAD + lbl_w + GAP + rating_w + PILL_PAD
 
-                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_LGRAY)
+                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_DARK)
 
                 c.setFont("Helvetica-Bold", 7)
-                c.setFillColor(C_WHITE)
+                c.setFillColor(C_BLACK)
                 c.drawString(px + PILL_PAD, cursor + PILL_H/2 - 3.5, lbl_text)
 
                 badge_x = px + PILL_PAD + lbl_w + GAP
@@ -769,50 +831,35 @@ def build_pdf(data, output_path):
                 px += pill_w + 8
 
         for finding in data["findings"][:4]:
-            # Estimate height needed
             words   = finding.split()
             chars   = sum(len(w)+1 for w in words)
-            lines   = max(1, int(chars * 7.5 / (inner_w - 60)) + 1)
+            lines   = max(1, int(chars * 7.5 / (inner_w - 50)) + 1)
             fnd_h   = max(28, lines * 13 + 10)
 
             cursor -= fnd_h
             rounded_rect(c, PAD, cursor, inner_w, fnd_h, r=6, fill_color=C_DARK)
 
-            # Red left accent
-            c.setFillColor(C_RED)
+            # Gray left accent
+            c.setFillColor(C_GRAY)
             c.roundRect(PAD, cursor, 4, fnd_h, 2, fill=1, stroke=0)
 
-            # Arrow
-            c.setFont("Helvetica-Bold", 10)
-            c.setFillColor(C_RED)
-            c.drawString(PAD + 12, cursor + fnd_h/2 - 4, "!")
-
-            # Text
-            wrap_text(c, finding, PAD + 30, cursor + fnd_h - 11,
-                      inner_w - 44, font="Helvetica", size=8.5,
-                      color=C_WHITE, line_h=13)
+            # Text — starts further right, no icon
+            wrap_text(c, finding, PAD + 16, cursor + fnd_h - 11,
+                      inner_w - 30, font="Helvetica", size=8.5,
+                      color=C_BLACK, line_h=13)
             cursor -= 4
 
     # ── RECOMMENDATIONS ────────────────────────────────────────────────────────
     if data["recommendations"]:
         cursor -= 10
         c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(C_YELLOW)
-        c.drawString(PAD, cursor, "WHAT TO DO NEXT")
+        c.setFillColor(C_GRAY)
+        c.drawString(PAD, cursor, "HOW TO FIX IT")
         cursor -= 8
 
         n     = len(data["recommendations"])
         rec_w = (inner_w - (n-1)*6) / n
 
-        for i, rec in enumerate(data["recommendations"]):
-            rx = PAD + i * (rec_w + 6)
-
-            words = rec.split()
-            chars = sum(len(w)+1 for w in words)
-            lines = max(1, int(chars * 7.5 / (rec_w - 24)) + 1)
-            rec_h = max(52, lines * 13 + 30)
-
-        # Use max height for consistent cards
         words_all = [r.split() for r in data["recommendations"]]
         max_lines = max(max(1, int(sum(len(w)+1 for w in ws) * 7.5 / (rec_w - 24)) + 1)
                         for ws in words_all)
@@ -823,33 +870,30 @@ def build_pdf(data, output_path):
             rx = PAD + i * (rec_w + 6)
             rounded_rect(c, rx, cursor, rec_w, rec_h, r=8, fill_color=C_DARK)
 
-            # Number badge (yellow top section)
+            # Number badge — dark top
             badge_h = 28
-            rounded_rect(c, rx, cursor + rec_h - badge_h, rec_w, badge_h, r=8, fill_color=C_YELLOW)
-            # Square off bottom of badge so it joins the card cleanly
-            c.setFillColor(C_YELLOW)
+            rounded_rect(c, rx, cursor + rec_h - badge_h, rec_w, badge_h, r=8, fill_color=C_BLACK)
+            c.setFillColor(C_BLACK)
             c.rect(rx, cursor + rec_h - badge_h, rec_w, badge_h/2, fill=1, stroke=0)
 
             c.setFont("Helvetica-Bold", 14)
-            c.setFillColor(C_BLACK)
+            c.setFillColor(C_WHITE)
             c.drawCentredString(rx + rec_w/2, cursor + rec_h - 19, str(i+1))
 
-            # Text starts with generous top padding below the badge
             text_top = cursor + rec_h - badge_h - 14
             wrap_text(c, rec, rx + 12, text_top,
                       rec_w - 24, font="Helvetica", size=8.5,
-                      color=C_GRAY, line_h=13)
+                      color=C_BLACK, line_h=13)
 
         cursor -= 8
 
     # ── FOOTER ────────────────────────────────────────────────────────────────
     c.setStrokeColor(C_LGRAY)
     c.setLineWidth(0.5)
-    c.line(PAD, 18, PAGE_W - PAD, 18)
+    c.line(PAD, 28, PAGE_W - PAD, 28)
     c.setFont("Helvetica", 7)
     c.setFillColor(C_GRAY)
-    c.drawCentredString(PAGE_W/2, 8,
-        f"Prepared by {AUDITOR}  ·  {SITE_URL}  ·  {data['audit_date']}  ·  Confidential")
+    c.drawCentredString(PAGE_W / 2, 18, f"{CONTACT_EMAIL}  ·  {CONTACT_PHONE}")
 
     c.save()
 
