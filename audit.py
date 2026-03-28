@@ -19,11 +19,11 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 #  BRAND — light / print-friendly
 # ─────────────────────────────────────────────
 C_BLACK  = colors.HexColor("#1A1A1A")   # primary text
-C_DARK   = colors.HexColor("#F5F5F3")   # card bg (very light gray)
+C_DARK   = colors.HexColor("#FFFFFF")   # card bg (white, ink-friendly)
 C_YELLOW = colors.HexColor("#FFD100")   # yellow accent (used sparingly)
 C_WHITE  = colors.HexColor("#FFFFFF")
 C_GRAY   = colors.HexColor("#666666")   # muted text
-C_LGRAY  = colors.HexColor("#E8E8E5")   # subtle card / dividers
+C_LGRAY  = colors.HexColor("#D8D8D5")   # borders / dividers
 C_RED    = colors.HexColor("#C4161C")   # primary accent (Queso red)
 C_ORANGE = colors.HexColor("#D4720A")
 C_GREEN  = colors.HexColor("#1E7D3E")
@@ -70,6 +70,13 @@ def score_label(s, mx=5):
 def pct_color(p):
     if p is None: return C_GRAY
     return C_RED if p < 50 else (C_ORANGE if p < 70 else C_GREEN)
+
+def geo_label(score):
+    """Convert 1-5 geo score to a short readable label for the table."""
+    if score is None: return "N/A"
+    if score >= 4: return "Yes"
+    if score == 3: return "Partial"
+    return "No"
 
 def pct_label(p):
     if p is None: return "N/A"
@@ -238,7 +245,128 @@ def seo_check(html, city, btype):
         "has_phone":         bool(re.search(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}', soup.get_text())),
     }
 
+def consolidate_findings(findings, data):
+    """
+    Collapse repetitive city-mention issues into one polished finding.
+    Hard rule: if geo_score < 4, one slot is always reserved for the AI finding.
+    Fill remaining slots with other findings or Maps/GBP context as needed.
+    """
+    CITY_MARKERS = [
+        "city name is missing from your page title",
+        "city name isn't in your main headline",
+        "city is barely mentioned",
+    ]
+
+    LOAD_MARKERS = [
+        "loads code it doesn't use",
+        "loads unused styling files",
+    ]
+
+    AI_FINDING = (
+        "AI tools like ChatGPT aren't recommending you yet — they look for businesses "
+        "with clear location info, consistent reviews, and a well-structured website before "
+        "suggesting them to users."
+    )
+
+    LOAD_CONSOLIDATED = (
+        "Your site is loading files it doesn't need — this adds unnecessary wait time "
+        "for visitors on mobile, and Google factors page speed into local search rankings."
+    )
+
+    city_hits = [f for f in findings if any(m in f for m in CITY_MARKERS)]
+    load_hits  = [f for f in findings if any(m.lower() in f.lower() for m in LOAD_MARKERS)]
+    other     = [f for f in findings if
+                 not any(m in f for m in CITY_MARKERS) and
+                 not any(m.lower() in f.lower() for m in LOAD_MARKERS)]
+
+    consolidated = []
+
+    # 1. City consolidation
+    if len(city_hits) >= 2:
+        city = data.get("business_city", "your city").split("/")[0].split(",")[0].strip()
+        consolidated.append(
+            f"Your website doesn't clearly mention {city} — Google and AI tools "
+            f"can't confirm you're a local business, which hurts your ranking in local search results."
+        )
+    elif len(city_hits) == 1:
+        consolidated.append(city_hits[0])
+
+    # 2. Split other findings into real vs low-priority Lighthouse noise
+    LIGHTHOUSE_MARKERS = [
+        "loads code it doesn't use",
+        "loads unused styling files",
+        "text files aren't compressed",
+        "slow-loading code is delaying",
+        "page briefly freezes",
+        "main page content takes too long",
+    ]
+    real_other = [f for f in other if not any(m.lower() in f.lower() for m in LIGHTHOUSE_MARKERS)]
+    lh_other   = [f for f in other if any(m.lower() in f.lower() for m in LIGHTHOUSE_MARKERS)]
+
+    consolidated.extend(real_other)
+
+    # 2b. Load consolidation — if both load issues present, merge into one
+    if len(load_hits) >= 2:
+        lh_other = [LOAD_CONSOLIDATED] + [f for f in lh_other
+                    if not any(m.lower() in f.lower() for m in LOAD_MARKERS)]
+    else:
+        lh_other = load_hits + lh_other
+
+    # 3. Hard rule — AI finding gets a guaranteed slot if geo_score < 4
+    # Apply BEFORE adding low-priority lighthouse fillers
+    geo_score = data.get("geo_score", 5)
+    ai_already_present = any(
+        ("ChatGPT" in f or "aren't recommending you" in f)
+        for f in consolidated
+    )
+    if geo_score < 4 and not ai_already_present:
+        # Count how many high-priority slots are used (city + real findings)
+        high_pri_count = len(consolidated)
+        if high_pri_count >= 4:
+            # Bump last slot if it's lighthouse noise, otherwise take slot 4
+            consolidated = consolidated[:3] + [AI_FINDING]
+        else:
+            consolidated.append(AI_FINDING)
+
+    # 4. Fill remaining slots with lighthouse technical findings (lowest priority)
+    for f in lh_other:
+        if len(consolidated) >= 4:
+            break
+        if not any(f[:30] in x for x in consolidated):
+            consolidated.append(f)
+
+    # 5. Optional fillers if still under 4
+    fillers = [
+        (
+            "visibility_score",
+            "You're not appearing in Google Maps results for your services — the map pack "
+            "gets more clicks than regular search results for local businesses like yours."
+        ),
+        (
+            "gbp_score",
+            "Your Google Business listing isn't fully built out — incomplete profiles rank "
+            "lower and give customers less reason to choose you over a competitor."
+        ),
+    ]
+    for score_key, filler in fillers:
+        if len(consolidated) >= 4:
+            break
+        if data.get(score_key, 5) <= 2:
+            if not any(filler[:30] in f for f in consolidated):
+                consolidated.append(filler)
+
+    return consolidated[:4]
+
 def auto_site_score(exists, seo):
+    if not exists: return 1, ["No website found — you're invisible to anyone searching online"]
+    issues, score = [], 5
+    if not seo.get("city_in_title"):    score-=0.5; issues.append("Your city name is missing from your page title — Google can't tell where you are")
+    if not seo.get("city_in_h1"):       score-=0.5; issues.append("Your city name isn't in your main headline — customers searching locally won't find you")
+    if not seo.get("city_in_content"):  score-=1;   issues.append("Your city is barely mentioned on your website — Google doesn't know you're local")
+    if not seo.get("service_mentioned"):score-=1;   issues.append("What you do isn't clearly stated on your website — visitors and Google have to guess")
+    if not seo.get("is_mobile_ready"):  score-=1;   issues.append("Your site may not display properly on phones — most of your customers search on mobile")
+    if not seo.get("has_phone"):        score-=0.5; issues.append("No phone number found on your website — customers can't easily call you")
+    return max(1, round(score)), issues
     if not exists: return 1, ["No website found — you're invisible to anyone searching online"]
     issues, score = [], 5
     if not seo.get("city_in_title"):    score-=0.5; issues.append("Your city name is missing from your page title — Google can't tell where you are")
@@ -341,6 +469,10 @@ def collect_data():
                 _cs = prompt("  Competitor SEO score (0-100, or blank to skip)", default="")
                 data["comp_seo_pct"] = int(_cs) if _cs and _cs.isdigit() else None
 
+    print(f'\n  [COMPETITOR] GEO / AI Readiness')
+    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"]}" — does COMPETITOR appear?')
+    data["comp_geo_score"] = prompt("  Score", options=score_opts)
+
     divider("SCORING — CLIENT")
 
     # Website
@@ -387,7 +519,7 @@ def collect_data():
         line = input("  > ").strip()
         if line == "" and (not manual or manual[-1] == ""): break
         if line: manual.append(line)
-    data["findings"] = (auto_findings + manual)[:4]
+    data["findings"] = consolidate_findings(auto_findings + manual, data)
 
     # Auto-generate recommendations
     auto_recs = auto_recommendations(data, auto_findings + manual)
@@ -555,7 +687,7 @@ def build_pdf(data, output_path):
     # ── HEADER BLOCK ──────────────────────────────────────────────────────────
     HDR_H = 68
     cursor -= HDR_H
-    rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_DARK)
+    rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
     # Business name (large, dark)
     c.setFont("Helvetica-Bold", 20)
@@ -599,7 +731,7 @@ def build_pdf(data, output_path):
     # ── OVERALL SCORE + QUICK STATS ────────────────────────────────────────────
     STATS_H = 62
     cursor -= STATS_H
-    rounded_rect(c, PAD, cursor, inner_w, STATS_H, r=8, fill_color=C_DARK)
+    rounded_rect(c, PAD, cursor, inner_w, STATS_H, r=8, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
     total = sum(data[k] for k in ["website_score","speed_score","gbp_score","visibility_score","geo_score"])
     total_pct = int((total / 25) * 100)
@@ -671,7 +803,7 @@ def build_pdf(data, output_path):
     COL1_CONTENT_H = SEC_LBL + BREAK_H + len(categories) * (ROW_H + 3) - 3
 
     # Competitor section height
-    COMP_ROWS   = 6   # header + 5 data rows
+    COMP_ROWS   = 7   # header + 6 data rows
     COMP_ROW_H  = 24
     COL2_CONTENT_H = SEC_LBL + BREAK_H + COMP_ROW_H + (COMP_ROWS - 1) * COMP_ROW_H + 24  # +24 for name caption below
 
@@ -692,7 +824,7 @@ def build_pdf(data, output_path):
         sc = data[key]
 
         # Row card
-        rounded_rect(c, lx, row_y, COL1_W, ROW_H, r=6, fill_color=C_DARK)
+        rounded_rect(c, lx, row_y, COL1_W, ROW_H, r=6, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
         # Score dot cluster (left side of card)
         score_dots(c, lx + 14, row_y + ROW_H/2, sc, dot_r=4, gap=11)
@@ -715,10 +847,23 @@ def build_pdf(data, output_path):
     c.setFillColor(C_GRAY)
     c.drawString(cx, cy + COL_H - SEC_LBL, "VS. COMPETITOR")
 
-    # Header row — light gray fill, dark text (ink-friendly, readable)
+    # Header row — rounded top only, square bottom so it joins the rows cleanly
     COMP_HDR_H = 24
     tbl_y = cy + COL_H - SEC_LBL - BREAK_H - COMP_HDR_H
-    rounded_rect(c, cx, tbl_y, COL2_W, COMP_HDR_H, r=6, fill_color=C_LGRAY)
+    r = 6
+    # Draw rounded-top-only shape manually
+    c.setFillColor(C_WHITE)
+    c.setStrokeColor(C_BLACK)
+    c.setLineWidth(0.8)
+    p = c.beginPath()
+    p.moveTo(cx + r, tbl_y + COMP_HDR_H)
+    p.arcTo(cx, tbl_y + COMP_HDR_H - 2*r, cx + 2*r, tbl_y + COMP_HDR_H, startAng=90, extent=90)
+    p.lineTo(cx, tbl_y)
+    p.lineTo(cx + COL2_W, tbl_y)
+    p.lineTo(cx + COL2_W, tbl_y + COMP_HDR_H - r)
+    p.arcTo(cx + COL2_W - 2*r, tbl_y + COMP_HDR_H - 2*r, cx + COL2_W, tbl_y + COMP_HDR_H, startAng=0, extent=90)
+    p.close()
+    c.drawPath(p, fill=1, stroke=1)
 
     cw = COL2_W / 3
     for i, lbl in enumerate(["", "You", "Them"]):
@@ -732,32 +877,50 @@ def build_pdf(data, output_path):
         ("Website",     "Yes" if data["has_website"] else "No",   "Yes" if data["comp_has_site"] else "No"),
         ("Phone Speed", pct_label(data.get("client_ps")),         pct_label(data.get("comp_ps"))),
         ("SEO Score",   pct_label(data.get("client_seo_pct")),    pct_label(data.get("comp_seo_pct"))),
+        ("AI Search",   geo_label(data.get("geo_score")),         geo_label(data.get("comp_geo_score"))),
     ]
 
     dr_y = tbl_y - COMP_ROW_H
     for ri, (label, v1, v2) in enumerate(comp_rows_data):
         is_last = ri == len(comp_rows_data) - 1
-        bg = C_DARK if ri % 2 == 0 else C_LGRAY
+        r_val = 6 if is_last else 0
+        top_r = 0  # rows always square on top
 
+        # White fill, light border, rounded only on bottom of last row
+        c.setFillColor(C_WHITE)
+        c.setStrokeColor(C_LGRAY)
+        c.setLineWidth(0.5)
         if is_last:
-            # Use roundRect for the last row to get rounded bottom corners
-            c.setFillColor(bg)
-            c.roundRect(cx, dr_y, COL2_W, COMP_ROW_H, 6, fill=1, stroke=0)
-            # Square off the top of this rounded rect
+            c.roundRect(cx, dr_y, COL2_W, COMP_ROW_H, r_val, fill=1, stroke=1)
+            c.setFillColor(C_WHITE)
             c.rect(cx, dr_y + COMP_ROW_H/2, COL2_W, COMP_ROW_H/2, fill=1, stroke=0)
+            # redraw border on top half
+            c.setStrokeColor(C_LGRAY)
+            c.setLineWidth(0.5)
+            c.line(cx, dr_y + COMP_ROW_H, cx + COL2_W, dr_y + COMP_ROW_H)
+            c.line(cx, dr_y, cx, dr_y + COMP_ROW_H)
+            c.line(cx + COL2_W, dr_y, cx + COL2_W, dr_y + COMP_ROW_H)
         else:
-            rounded_rect(c, cx, dr_y, COL2_W, COMP_ROW_H, r=0, fill_color=bg)
+            c.rect(cx, dr_y, COL2_W, COMP_ROW_H, fill=1, stroke=1)
 
         c.setFont("Helvetica", 8)
         c.setFillColor(C_GRAY)
         c.drawString(cx + 8, dr_y + COMP_ROW_H/2 - 3.5, label)
 
-        # Color-code percentage rows
+        # Color-code percentage and yes/no rows
         if label in ("Phone Speed", "SEO Score"):
             try: v1_col = pct_color(int(v1.replace("/100","")))
             except: v1_col = C_BLACK
             try: v2_col = pct_color(int(v2.replace("/100","")))
             except: v2_col = C_BLACK
+        elif label == "AI Search":
+            def ai_col(v):
+                if v == "Yes":     return C_GREEN
+                if v == "Partial": return C_ORANGE
+                if v == "No":      return C_RED
+                return C_BLACK
+            v1_col = ai_col(v1)
+            v2_col = ai_col(v2)
         else:
             v1_col = v2_col = C_BLACK
 
@@ -815,7 +978,7 @@ def build_pdf(data, output_path):
                 rating_w = c.stringWidth(rating_disp, "Helvetica-Bold", 7)
                 pill_w   = PILL_PAD + lbl_w + GAP + rating_w + PILL_PAD
 
-                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_DARK)
+                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
                 c.setFont("Helvetica-Bold", 7)
                 c.setFillColor(C_BLACK)
@@ -837,7 +1000,7 @@ def build_pdf(data, output_path):
             fnd_h   = max(28, lines * 13 + 10)
 
             cursor -= fnd_h
-            rounded_rect(c, PAD, cursor, inner_w, fnd_h, r=6, fill_color=C_DARK)
+            rounded_rect(c, PAD, cursor, inner_w, fnd_h, r=6, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
             # Gray left accent
             c.setFillColor(C_GRAY)
@@ -868,19 +1031,22 @@ def build_pdf(data, output_path):
 
         for i, rec in enumerate(data["recommendations"]):
             rx = PAD + i * (rec_w + 6)
-            rounded_rect(c, rx, cursor, rec_w, rec_h, r=8, fill_color=C_DARK)
+            rounded_rect(c, rx, cursor, rec_w, rec_h, r=8, fill_color=C_WHITE, stroke_color=C_LGRAY, stroke_width=0.5)
 
-            # Number badge — dark top
-            badge_h = 28
-            rounded_rect(c, rx, cursor + rec_h - badge_h, rec_w, badge_h, r=8, fill_color=C_BLACK)
-            c.setFillColor(C_BLACK)
-            c.rect(rx, cursor + rec_h - badge_h, rec_w, badge_h/2, fill=1, stroke=0)
-
-            c.setFont("Helvetica-Bold", 14)
+            # Number — simple circle outline at top center
+            badge_r = 12
+            badge_cx = rx + rec_w / 2
+            badge_cy = cursor + rec_h - badge_r - 8
+            c.setStrokeColor(C_BLACK)
             c.setFillColor(C_WHITE)
-            c.drawCentredString(rx + rec_w/2, cursor + rec_h - 19, str(i+1))
+            c.setLineWidth(1.2)
+            c.circle(badge_cx, badge_cy, badge_r, fill=1, stroke=1)
 
-            text_top = cursor + rec_h - badge_h - 14
+            c.setFont("Helvetica-Bold", 11)
+            c.setFillColor(C_BLACK)
+            c.drawCentredString(badge_cx, badge_cy - 4, str(i + 1))
+
+            text_top = cursor + rec_h - badge_r * 2 - 20
             wrap_text(c, rec, rx + 12, text_top,
                       rec_w - 24, font="Helvetica", size=8.5,
                       color=C_BLACK, line_h=13)
