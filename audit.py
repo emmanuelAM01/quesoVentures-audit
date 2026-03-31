@@ -72,11 +72,11 @@ def pct_color(p):
     return C_RED if p < 50 else (C_ORANGE if p < 70 else C_GREEN)
 
 def geo_label(score):
-    """Convert 1-5 geo score to a short readable label for the table."""
-    if score is None: return "N/A"
-    if score >= 4: return "Yes"
-    if score == 3: return "Partial"
-    return "No"
+    """Convert 1-5 geo score to outcome language for the competitor table."""
+    if score is None:  return "N/A"
+    if score >= 4:     return "Shows up"
+    if score == 3:     return "Sometimes"
+    return "Doesn't show up"
 
 def pct_label(p):
     if p is None: return "N/A"
@@ -228,6 +228,40 @@ def scrape_gbp(name, city):
     except Exception as e:
         print(f"failed ({e})"); return None, None
 
+def lookup_places_gbp(name: str, city: str) -> dict:
+    """
+    Looks up a business by name+city using Google Places API (New) text search.
+    Returns dict with rating, review_count, photo_count or empty dict on failure.
+    """
+    api_key = os.environ.get("PLACES_API_KEY", "")
+    if not api_key:
+        return {}
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type":     "application/json",
+        "X-Goog-Api-Key":   api_key,
+        "X-Goog-FieldMask": "places.displayName,places.rating,places.userRatingCount,places.photos",
+    }
+    body = {
+        "textQuery":      f"{name} {city}",
+        "languageCode":   "en",
+        "maxResultCount": 1,
+    }
+    try:
+        r = requests.post(url, json=body, headers=headers, timeout=10)
+        places = r.json().get("places", [])
+        if not places:
+            return {}
+        p = places[0]
+        return {
+            "rating":       p.get("rating"),
+            "review_count": p.get("userRatingCount", 0),
+            "photo_count":  len(p.get("photos", [])),
+        }
+    except Exception:
+        return {}
+
+
 def seo_check(html, city, btype):
     if not html: return {}
     soup = BeautifulSoup(html,"html.parser")
@@ -247,52 +281,51 @@ def seo_check(html, city, btype):
 
 def consolidate_findings(findings, data):
     """
-    Collapse repetitive city-mention issues into one polished finding.
-    Hard rule: if geo_score < 4, one slot is always reserved for the AI finding.
-    Fill remaining slots with other findings or Maps/GBP context as needed.
+    Always returns exactly 4 findings.
+    Slots 1-3: dynamic findings from what we detected, filled with hardcoded
+               universal truths if short. Slot 4: AI finding, always, no exceptions.
     """
-    CITY_MARKERS = [
-        "city name is missing from your page title",
-        "city name isn't in your main headline",
-        "city is barely mentioned",
-    ]
 
-    LOAD_MARKERS = [
-        "loads code it doesn't use",
-        "loads unused styling files",
-    ]
+    # ── The 4 fixed strings ───────────────────────────────────────────────────
 
     AI_FINDING = (
-        "AI tools like ChatGPT aren't recommending you yet — they look for businesses "
-        "with clear location info, consistent reviews, and a well-structured website before "
-        "suggesting them to users."
+        "You don't show up when potential clients search for your services using AI — "
+        "these tools look for businesses with clear location signals, consistent citations, "
+        "and content structured around how people actually search. This is a new and emerging way to search."
     )
 
-    LOAD_CONSOLIDATED = (
-        "Your site is loading files it doesn't need — this adds unnecessary wait time "
-        "for visitors on mobile, and Google factors page speed into local search rankings."
-    )
+    # Universal fillers — true for every local service business.
+    # They name a real problem, imply invisible complexity, position you as the solver.
+    FILLERS = [
+        (
+            "Your review profile isn't being leveraged to its full potential — how reviews are "
+            "structured, responded to, and distributed across platforms directly affects how "
+            "search engines and AI tools rank your business against competitors"
+        ),
+        (
+            "Appearing in the top 3 Google Maps results requires more than just having a listing. "
+            "Businesses that consistently show up there have signals working behind the "
+            "scenes that most business owners don't know exist"
+        ),
+        (
+            "The way people search for your type of business has shifted — most high-intent "
+            "clients now start with a question, not a keyword, and the businesses set up to "
+            "answer those questions are the ones getting the call"
+        ),
+    ]
 
-    city_hits = [f for f in findings if any(m in f for m in CITY_MARKERS)]
-    load_hits  = [f for f in findings if any(m.lower() in f.lower() for m in LOAD_MARKERS)]
-    other     = [f for f in findings if
-                 not any(m in f for m in CITY_MARKERS) and
-                 not any(m.lower() in f.lower() for m in LOAD_MARKERS)]
+    # ── Build slots 1-3 from dynamic findings ────────────────────────────────
 
-    consolidated = []
-
-    # 1. City consolidation
-    if len(city_hits) >= 2:
-        city = data.get("business_city", "your city").split("/")[0].split(",")[0].strip()
-        consolidated.append(
-            f"Your website doesn't clearly mention {city} — Google and AI tools "
-            f"can't confirm you're a local business, which hurts your ranking in local search results."
-        )
-    elif len(city_hits) == 1:
-        consolidated.append(city_hits[0])
-
-    # 2. Split other findings into real vs low-priority Lighthouse noise
-    LIGHTHOUSE_MARKERS = [
+    # Deduplicate city-related findings into one
+    CITY_KEYS = [
+        "search engines and ai tools can't confirm",
+        "can't confirm your business serves",
+        "city name is missing",
+        "city name isn't in",
+        "city is barely mentioned",
+        "not in the conversation",
+    ]
+    NOISE_KEYS = [
         "loads code it doesn't use",
         "loads unused styling files",
         "text files aren't compressed",
@@ -300,81 +333,81 @@ def consolidate_findings(findings, data):
         "page briefly freezes",
         "main page content takes too long",
     ]
-    real_other = [f for f in other if not any(m.lower() in f.lower() for m in LIGHTHOUSE_MARKERS)]
-    lh_other   = [f for f in other if any(m.lower() in f.lower() for m in LIGHTHOUSE_MARKERS)]
 
-    consolidated.extend(real_other)
+    city_f  = [f for f in findings if any(k in f.lower() for k in CITY_KEYS)]
+    noise_f = [f for f in findings if any(k.lower() in f.lower() for k in NOISE_KEYS)]
+    other_f = [f for f in findings if f not in city_f and f not in noise_f]
 
-    # 2b. Load consolidation — if both load issues present, merge into one
-    if len(load_hits) >= 2:
-        lh_other = [LOAD_CONSOLIDATED] + [f for f in lh_other
-                    if not any(m.lower() in f.lower() for m in LOAD_MARKERS)]
-    else:
-        lh_other = load_hits + lh_other
+    slots = []
 
-    # 3. Hard rule — AI finding gets a guaranteed slot if geo_score < 4
-    # Apply BEFORE adding low-priority lighthouse fillers
-    geo_score = data.get("geo_score", 5)
-    ai_already_present = any(
-        ("ChatGPT" in f or "aren't recommending you" in f)
-        for f in consolidated
-    )
-    if geo_score < 4 and not ai_already_present:
-        # Count how many high-priority slots are used (city + real findings)
-        high_pri_count = len(consolidated)
-        if high_pri_count >= 4:
-            # Bump last slot if it's lighthouse noise, otherwise take slot 4
-            consolidated = consolidated[:3] + [AI_FINDING]
-        else:
-            consolidated.append(AI_FINDING)
+    # Add city finding (collapsed to one if multiple)
+    if city_f:
+        slots.append(
+            "Search engines and AI tools can't confirm your business serves this area — "
+            "when someone nearby searches for what you offer, you're not in the conversation"
+        )
 
-    # 4. Fill remaining slots with lighthouse technical findings (lowest priority)
-    for f in lh_other:
-        if len(consolidated) >= 4:
+    # Add other real findings
+    for f in other_f:
+        if len(slots) >= 3:
             break
-        if not any(f[:30] in x for x in consolidated):
-            consolidated.append(f)
+        if not any(f[:35].lower() in s.lower() for s in slots):
+            slots.append(f)
 
-    # 5. Optional fillers if still under 4
-    fillers = [
-        (
-            "visibility_score",
-            "You're not appearing in Google Maps results for your services — the map pack "
-            "gets more clicks than regular search results for local businesses like yours."
-        ),
-        (
-            "gbp_score",
-            "Your Google Business listing isn't fully built out — incomplete profiles rank "
-            "lower and give customers less reason to choose you over a competitor."
-        ),
-    ]
-    for score_key, filler in fillers:
-        if len(consolidated) >= 4:
-            break
-        if data.get(score_key, 5) <= 2:
-            if not any(filler[:30] in f for f in consolidated):
-                consolidated.append(filler)
+    # Fill remaining slots 1-3 with universal fillers
+    filler_idx = 0
+    while len(slots) < 3 and filler_idx < len(FILLERS):
+        candidate = FILLERS[filler_idx]
+        if not any(candidate[:35].lower() in s.lower() for s in slots):
+            slots.append(candidate)
+        filler_idx += 1
 
-    return consolidated[:4]
+    # ── Slot 4: AI finding — always ──────────────────────────────────────────
+    slots.append(AI_FINDING)
 
-def auto_site_score(exists, seo):
-    if not exists: return 1, ["No website found — you're invisible to anyone searching online"]
+    return slots[:4]
+
+def _phone_finding(html):
+    """
+    Distinguish between no phone at all vs phone buried/hard to find.
+    Hard to find = phone exists in HTML but not in a prominent location
+    (not in header, hero, or nav — only in footer or contact page).
+    """
+    if not html:
+        return "missing"
+    from bs4 import BeautifulSoup as _BS
+    import re as _re
+    soup = _BS(html, "html.parser")
+    phone_pattern = _re.compile(r'\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}')
+    # Check prominent zones first
+    prominent = ""
+    for tag in ["header", "nav"]:
+        el = soup.find(tag)
+        if el: prominent += el.get_text()
+    # Check first 2 headings and hero area (first 3000 chars of body text)
+    body_text = soup.get_text()[:3000]
+    prominent += body_text
+    if phone_pattern.search(prominent):
+        return "visible"       # phone easy to find
+    # Check rest of page
+    if phone_pattern.search(soup.get_text()):
+        return "buried"        # phone exists but hard to find
+    return "missing"           # no phone at all
+
+
+def auto_site_score(exists, seo, html=None):
+    if not exists: return 1, ["Your business has no website — search engines and AI tools have nothing to find, index, or recommend"]
     issues, score = [], 5
-    if not seo.get("city_in_title"):    score-=0.5; issues.append("Your city name is missing from your page title — Google can't tell where you are")
-    if not seo.get("city_in_h1"):       score-=0.5; issues.append("Your city name isn't in your main headline — customers searching locally won't find you")
-    if not seo.get("city_in_content"):  score-=1;   issues.append("Your city is barely mentioned on your website — Google doesn't know you're local")
-    if not seo.get("service_mentioned"):score-=1;   issues.append("What you do isn't clearly stated on your website — visitors and Google have to guess")
-    if not seo.get("is_mobile_ready"):  score-=1;   issues.append("Your site may not display properly on phones — most of your customers search on mobile")
-    if not seo.get("has_phone"):        score-=0.5; issues.append("No phone number found on your website — customers can't easily call you")
-    return max(1, round(score)), issues
-    if not exists: return 1, ["No website found — you're invisible to anyone searching online"]
-    issues, score = [], 5
-    if not seo.get("city_in_title"):    score-=0.5; issues.append("Your city name is missing from your page title — Google can't tell where you are")
-    if not seo.get("city_in_h1"):       score-=0.5; issues.append("Your city name isn't in your main headline — customers searching locally won't find you")
-    if not seo.get("city_in_content"):  score-=1;   issues.append("Your city is barely mentioned on your website — Google doesn't know you're local")
-    if not seo.get("service_mentioned"):score-=1;   issues.append("What you do isn't clearly stated on your website — visitors and Google have to guess")
-    if not seo.get("is_mobile_ready"):  score-=1;   issues.append("Your site may not display properly on phones — most of your customers search on mobile")
-    if not seo.get("has_phone"):        score-=0.5; issues.append("No phone number found on your website — customers can't easily call you")
+    if not seo.get("city_in_title"):    score-=0.5; issues.append("Search engines and AI tools can't confirm your business serves this area — when someone nearby searches for what you offer, you're not in the conversation")
+    if not seo.get("city_in_h1"):       score-=0.5; issues.append("Search engines and AI tools can't confirm your business serves this area — when someone nearby searches for what you offer, you're not in the conversation")
+    if not seo.get("city_in_content"):  score-=1;   issues.append("Search engines and AI tools can't confirm your business serves this area — when someone nearby searches for what you offer, you're not in the conversation")
+    if not seo.get("service_mentioned"):score-=1;   issues.append("Your website doesn't clearly communicate what you do — Google and AI tools can't recommend a business they can't categorize")
+    if not seo.get("is_mobile_ready"):  score-=1;   issues.append("Most of your potential clients are searching on their phone — a slow site means they're gone before they ever see you, and search engines take note")
+    phone_status = _phone_finding(html)
+    if phone_status == "missing":
+        score-=0.5; issues.append("Visitors who are ready to book hit a wall — when the path to contact isn't clear, users leave and search engines can't signal your business as the obvious next step")
+    elif phone_status == "buried":
+        score-=0.25; issues.append("Visitors who are ready to book hit a wall — when the path to contact isn't clear, users leave and search engines can't signal your business as the obvious next step")
     return max(1, round(score)), issues
 
 # ─────────────────────────────────────────────
@@ -403,7 +436,7 @@ def collect_data():
     data["has_website"] = exists
     seo = seo_check(html, data["business_city"], data["business_type"]) if html else {}
     data["_seo"] = seo  # stash for recommendation engine
-    ws_score, ws_issues = auto_site_score(exists, seo)
+    ws_score, ws_issues = auto_site_score(exists, seo, html=html)
     auto_findings.extend(ws_issues)
 
     client_ps_data = get_pagespeed(site_url, "client", full=True) if exists else {}
@@ -426,29 +459,53 @@ def collect_data():
     ps_score = ps_to_score(client_ps)
 
     if client_ps is not None:
-        if client_ps < 50:   auto_findings.append(f"Your site takes too long to load on phones ({client_ps}/100) — visitors leave before it opens")
-        elif client_ps < 70: auto_findings.append(f"Your site is slower than average on phones ({client_ps}/100) — this costs you customers")
+        if client_ps < 50:   auto_findings.append(f"Your site takes too long to load on phones ({client_ps}/100). Visitors are leaving your site before it even opens.")
+        elif client_ps < 70: auto_findings.append(f"Your site is slower than average on phones ({client_ps}/100). This costs you customers because majority of people browse on their phones.")
     if client_seo_pct is not None and client_seo_pct < 80:
         auto_findings.append(f"Google found technical issues on your site that make it harder to rank ({client_seo_pct}/100)")
     # Add top Lighthouse audit failures as findings
     for audit_str in client_audits:
         auto_findings.append(audit_str)
 
-    rat, rev = scrape_gbp(data["business_name"], data["business_city"])
-    if not rat:
-        print("  GBP scrape failed — enter manually (check Google)\n")
-        rat = prompt("  Google star rating (e.g. 4.2)", default="?")
-        rev = prompt("  Google review count", default="0")
-    data["review_rating"] = rat or "?"
-    data["review_count"]  = rev or "0"
+    # Rating + review count via Places API (same free API as the pipeline)
+    print("  Fetching GBP data from Places API...", end=" ", flush=True)
+    gbp_data = lookup_places_gbp(data["business_name"], data["business_city"])
+    if gbp_data.get("rating"):
+        rat = str(gbp_data["rating"])
+        rev = str(gbp_data["review_count"])
+        print(f"rating={rat}  reviews={rev}")
+        ov_rat = prompt(f"  Star rating (Enter to keep {rat})", default=rat)
+        ov_rev = prompt(f"  Review count (Enter to keep {rev})", default=rev)
+        data["review_rating"] = ov_rat
+        data["review_count"]  = ov_rev
+    else:
+        print("not found")
+        print("  Enter manually (check Google for this business):")
+        data["review_rating"] = prompt("  Star rating (e.g. 4.8)", default="?")
+        data["review_count"]  = prompt("  Review count (e.g. 270)", default="0")
 
     print(f"\n  Client: website={'✓' if exists else '✗'}  perf={client_ps or 'N/A'}  seo={client_seo_pct or 'N/A'}  rating={data['review_rating']}  reviews={data['review_count']}")
 
     divider("COMPETITOR")
     print(f'  Search Google: "{data["business_type"]} {data["business_city"]}" — pick the top result that is NOT the client.\n')
-    data["comp_name"]    = prompt("Competitor name", default="N/A")
-    data["comp_rating"]  = prompt("Competitor star rating", default="?")
-    data["comp_reviews"] = prompt("Competitor review count", default="?")
+    data["comp_name"] = prompt("Competitor name", default="N/A")
+
+    # Auto-fetch competitor rating + reviews via Places API
+    print("  Fetching competitor GBP data...", end=" ", flush=True)
+    comp_gbp = lookup_places_gbp(data["comp_name"], data["business_city"])
+    if comp_gbp.get("rating"):
+        c_rat = str(comp_gbp["rating"])
+        c_rev = str(comp_gbp["review_count"])
+        print(f"rating={c_rat}  reviews={c_rev}")
+        ov_crat = prompt(f"  Competitor star rating (Enter to keep {c_rat})", default=c_rat)
+        ov_crev = prompt(f"  Competitor review count (Enter to keep {c_rev})", default=c_rev)
+        data["comp_rating"]  = ov_crat
+        data["comp_reviews"] = ov_crev
+    else:
+        print("not found")
+        data["comp_rating"]  = prompt("  Competitor star rating", default="?")
+        data["comp_reviews"] = prompt("  Competitor review count", default="?")
+
     comp_url_in = prompt("Competitor website URL (blank if none)", default="")
     data["comp_has_site"] = bool(comp_url_in and comp_url_in.lower() not in ("none","n",""))
     data["comp_website"]  = comp_url_in
@@ -469,9 +526,11 @@ def collect_data():
                 _cs = prompt("  Competitor SEO score (0-100, or blank to skip)", default="")
                 data["comp_seo_pct"] = int(_cs) if _cs and _cs.isdigit() else None
 
-    print(f'\n  [COMPETITOR] GEO / AI Readiness')
-    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"]}" — does COMPETITOR appear?')
-    data["comp_geo_score"] = prompt("  Score", options=score_opts)
+    print(f'\n  [COMPETITOR] AI Search Visibility')
+    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"].split(",")[0].strip()}" — does the COMPETITOR appear?')
+    _cgeo_opts = ["No — not mentioned at all", "Sometimes — mentioned but not by name", "Yes — recommended by name"]
+    _cgeo_ans  = prompt("  Do they show up?", options=_cgeo_opts)
+    data["comp_geo_score"] = {1: 1, 2: 3, 3: 5}[_cgeo_ans]
 
     divider("SCORING — CLIENT")
 
@@ -494,108 +553,139 @@ def collect_data():
         if not PAGESPEED_KEY: print("  Tip: set PAGESPEED_KEY env var for auto-scoring")
         data["speed_score"] = prompt("[CLIENT] Mobile Page Speed (score manually)", options=score_opts)
 
-    # GBP
+    # GBP — plain language
     print(f"\n  [CLIENT] Google Business Profile")
-    print("  Check: complete photos, hours, description, services, recent posts?")
-    data["gbp_score"] = prompt("  Score", options=score_opts)
+    print("  Check Google: do they have photos, hours, description, and services filled out?")
+    _gbp_opts = ["No — profile is bare or missing", "Partially — some info but incomplete", "Yes — profile looks complete"]
+    _gbp_ans  = prompt("  How complete is their profile?", options=_gbp_opts)
+    data["gbp_score"] = {1: 2, 2: 3, 3: 5}[_gbp_ans]
 
-    # Visibility
-    print(f'\n  [CLIENT] Local Search Visibility')
-    print(f'  Search: "{data["business_type"]} {data["business_city"]}" — is the CLIENT in the top 3 map results?')
-    data["visibility_score"] = prompt("  Score", options=score_opts)
+    # Visibility — plain language
+    print(f'\n  [CLIENT] Google Maps Visibility')
+    print(f'  Search Google: "{data["business_type"]} {data["business_city"]}" — does the client show up in the map results?')
+    _vis_opts = ["No — not in map results at all", "Sometimes — appears but not in top 3", "Yes — shows up in the top 3"]
+    _vis_ans  = prompt("  Do they show up?", options=_vis_opts)
+    data["visibility_score"] = {1: 1, 2: 3, 3: 5}[_vis_ans]
 
-    # GEO
-    print(f'\n  [CLIENT] GEO / AI Readiness')
-    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"]}" — does CLIENT appear?')
-    data["geo_score"] = prompt("  Score", options=score_opts)
+    # GEO — plain language
+    print(f'\n  [CLIENT] AI Search Visibility')
+    print(f'  Ask ChatGPT: "best {data["business_type"]} in {data["business_city"].split(",")[0].strip()}" — does the client appear?')
+    _geo_opts = ["No — not mentioned at all", "Sometimes — mentioned but not by name", "Yes — recommended by name"]
+    _geo_ans  = prompt("  Do they show up?", options=_geo_opts)
+    data["geo_score"] = {1: 1, 2: 3, 3: 5}[_geo_ans]
+
+    # Store phone status for findings logic
+    data["_phone_status"] = _phone_finding(html) if html else "missing"
 
     divider("FINDINGS")
-    if auto_findings:
-        print("\n  Auto-detected (included automatically):")
-        for f in auto_findings: print(f"    → {f}")
-    print("\n  Add your own (press Enter twice when done):")
-    manual = []
-    while True:
-        line = input("  > ").strip()
-        if line == "" and (not manual or manual[-1] == ""): break
-        if line: manual.append(line)
-    data["findings"] = consolidate_findings(auto_findings + manual, data)
+    data["findings"] = consolidate_findings(auto_findings, data)
+    if data["findings"]:
+        print("\n  Auto-detected findings:")
+        for f in data["findings"]: print(f"    → {f}")
 
-    # Auto-generate recommendations
-    auto_recs = auto_recommendations(data, auto_findings + manual)
-    divider("RECOMMENDATIONS")
-    print("\n  Auto-generated recommendations (based on findings):")
-    for i, r in enumerate(auto_recs, 1):
-        print(f"    {i}. {r}")
-    print("\n  Override any? (press Enter to keep, or type replacement)")
-    final_recs = list(auto_recs)
-    for i in range(len(final_recs)):
-        override = input(f"  [{i+1}] override (Enter to keep): ").strip()
-        if override:
-            final_recs[i] = override
-    print("\n  Add an extra recommendation? (Enter to skip)")
-    extra = input("  > ").strip()
-    if extra:
-        final_recs.append(extra)
-    data["recommendations"] = final_recs[:3]
+    # HOW TO FIX IT removed from PDF — that's the in-person conversation
+    data["recommendations"] = []
+    data["fix_pairs"] = []
 
     data["audit_date"] = date.today().strftime("%B %d, %Y")
     return data
 
-def auto_recommendations(data, findings):
-    """Generate tailored recommendations based on what was found."""
-    recs = []
-
-    seo = data.get("_seo", {})
+def auto_fix_pairs(data, findings):
+    """
+    Generate (problem, fix) pairs for the combined What We're Fixing section.
+    Each pair is one row: left = what's wrong in plain English, right = what I'm doing about it.
+    Returns list of (problem, fix) tuples, max 4.
+    """
+    pairs = []
+    seo    = data.get("_seo", {})
     exists = data.get("has_website", False)
-    ps = data.get("client_ps")
-    seo_pct = data.get("client_seo_pct")
-    gbp = data.get("gbp_score", 3)
-    vis = data.get("visibility_score", 3)
-    geo = data.get("geo_score", 3)
+    ps     = data.get("client_ps")
+    seo_pct= data.get("client_seo_pct")
+    gbp    = data.get("gbp_score", 3)
+    vis    = data.get("visibility_score", 3)
+    geo    = data.get("geo_score", 3)
+    city   = data.get("business_city", "your city").split(",")[0].strip()
+    btype  = data.get("business_type", "your business")
 
     if not exists:
-        recs.append("Get a simple website up — even a one-page site puts you on the map for customers searching online. Right now you're invisible to anyone who doesn't already know you.")
+        pairs.append((
+            "You have no website — anyone searching for you online can't find you at all",
+            "I'll build you a simple, fast site that tells Google who you are and where you are"
+        ))
     else:
-        if not seo.get("city_in_title") or not seo.get("city_in_h1"):
-            recs.append(f"Add '{data['business_city'].split(',')[0].strip()}' to your page title and main headline so Google knows exactly where you serve customers.")
+        if not seo.get("city_in_title") or not seo.get("city_in_h1") or not seo.get("city_in_content"):
+            pairs.append((
+                f"Your site doesn't clearly say you're in {city} — Google can't confirm you're a local business",
+                f"I'll add {city} to your page title, headline, and content so Google knows exactly where you serve clients"
+            ))
         if not seo.get("service_mentioned"):
-            recs.append(f"Make it obvious on your homepage what you do — Google and customers shouldn't have to guess you're a {data['business_type']}.")
+            pairs.append((
+                f"It's not clear on your site that you're a {btype} — Google and new visitors have to guess",
+                "I'll make your service obvious on the homepage so Google and customers immediately know what you offer"
+            ))
         if ps is not None and ps < 70:
-            recs.append(f"Speed up your site on mobile — it scores {ps}/100 right now. Most of your customers search on their phone, and a slow site means they leave before they even see you.")
-        if seo_pct is not None and seo_pct < 80:
-            recs.append("Fix the technical issues Google flagged on your site — these are invisible to visitors but they quietly hurt where you rank in search results.")
-        if not seo.get("has_phone"):
-            recs.append("Put your phone number on your website where people can see it. If someone has to search for how to call you, most of them won't bother.")
+            pairs.append((
+                f"Your site loads too slowly on phones ({ps}/100) — most people leave before it opens",
+                f"I'll compress assets, defer scripts, and fix the technical bottlenecks slowing your site down. Not a DIY fix — but the right work moves that score from {ps} to 85+ fast"
+            ))
+        if not seo.get("is_mobile_ready"):
+            pairs.append((
+                "Your site doesn't display correctly on phones — that's how most of your customers search",
+                "I'll make your site fully mobile-friendly so it looks right on every screen"
+            ))
+        phone_status = data.get("_phone_status", "visible")
+        if phone_status == "missing":
+            pairs.append((
+                "There's no phone number on your site — someone ready to book can't call you",
+                "I'll add your number in a visible spot so customers can reach you in one tap"
+            ))
+        elif phone_status == "buried":
+            pairs.append((
+                "Your phone number is hard to find — most people won't hunt for it",
+                "I'll move your number to the top of every page so it's impossible to miss"
+            ))
 
     if gbp <= 2:
-        recs.append("Fill out your Google Business listing completely — add photos, your hours, a description of what you do, and the services you offer. It's free and it's one of the fastest ways to show up higher on Google Maps.")
+        pairs.append((
+            "Your Google Business profile is incomplete — Google ranks complete profiles higher in Maps",
+            "I'll fill out your profile with photos, hours, services, and a description to push you up in local results"
+        ))
     elif gbp == 3:
-        recs.append("Your Google listing is set up but not fully optimized. Adding recent photos and responding to reviews can bump you up in local search results quickly.")
-
-    if vis <= 2:
-        recs.append(f"Right now you're not showing up when someone searches for '{data['business_type']} in {data['business_city'].split(',')[0].strip()}' on Google Maps. That's your highest-intent customer — they're ready to call someone. Let's make sure that someone is you.")
+        pairs.append((
+            "Your Google listing is set up but not fully built out — you're leaving ranking points on the table",
+            "I'll add recent photos and optimize your listing so you show up higher when people search nearby"
+        ))
 
     if geo <= 2:
-        recs.append("AI tools like ChatGPT are starting to recommend local businesses by name. You're not showing up yet — getting your online presence in order now puts you ahead of competitors who haven't figured this out.")
+        pairs.append((
+            "You don't show up when people ask AI to recommend a " + btype + " in " + city,
+            "I'll build the structured data and local citations that AI tools use to decide who to recommend"
+        ))
+    elif geo == 3:
+        pairs.append((
+            "You show up inconsistently on AI search — not reliably recommended by name",
+            "I'll strengthen your citation signals and content authority so AI tools recommend you every time"
+        ))
 
-    # Always include a review nudge if reviews are low
     try:
         rev_count = int(data.get("review_count", 0))
         comp_rev  = int(data.get("comp_reviews", 0))
         if rev_count < 20 or (comp_rev > 0 and rev_count < comp_rev * 0.5):
-            recs.append(f"Ask your happy customers to leave a Google review. {data['comp_name']} has {data.get('comp_reviews', '?')} reviews — more reviews means Google shows you first more often.")
+            pairs.append((
+                f"You have fewer reviews than your competitor — Google shows businesses with more reviews first",
+                f"I'll set up a simple system to get your happy customers leaving reviews automatically"
+            ))
     except (ValueError, TypeError):
         pass
 
-    # Deduplicate and cap at 3
+    # Deduplicate and cap at 4 pairs
     seen, final = set(), []
-    for r in recs:
-        key = r[:40]
+    for p, f in pairs:
+        key = p[:40]
         if key not in seen:
             seen.add(key)
-            final.append(r)
-        if len(final) == 3:
+            final.append((p, f))
+        if len(final) == 4:
             break
 
     return final
@@ -677,27 +767,30 @@ def build_pdf(data, output_path):
     c.setFillColor(C_PAGE)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # Thin top bar — just a single clean line in dark gray
-    c.setFillColor(C_BLACK)
-    c.rect(0, PAGE_H - 3, PAGE_W, 3, fill=1, stroke=0)
-
-    inner_w = PAGE_W - 2*PAD
-    cursor  = PAGE_H - 3  # start just below top bar
+    inner_w    = PAGE_W - 2*PAD
+    CTA_H      = 58   # matches CTA_H_NEW in drawing section
+    CTA_PAD    = 16   # matches BOT_MARGIN
+    AUTH_H_RSV = 78
+    AUTH_GAP   = 16   # matches BOT_MARGIN
+    PAGE_BOT   = CTA_PAD + CTA_H + AUTH_GAP + AUTH_H_RSV + 10
+    cursor     = PAGE_H - 24   # tighter top margin
+    SEC_GAP    = 10   # uniform gap before every section label
+    LBL_GAP    = 6    # uniform gap between section label and first card
 
     # ── HEADER BLOCK ──────────────────────────────────────────────────────────
-    HDR_H = 68
+    HDR_H = 56
     cursor -= HDR_H
-    rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
+    rounded_rect(c, PAD, cursor, inner_w, HDR_H, r=8, fill_color=C_WHITE, stroke_color=C_LGRAY, stroke_width=0.5)
 
     # Business name (large, dark)
-    c.setFont("Helvetica-Bold", 20)
+    c.setFont("Helvetica-Bold", 18)
     c.setFillColor(C_BLACK)
-    c.drawString(PAD + 16, cursor + HDR_H - 30, data["business_name"])
+    c.drawString(PAD + 16, cursor + HDR_H - 24, data["business_name"])
 
     # Sub info
-    c.setFont("Helvetica", 10)
+    c.setFont("Helvetica", 9)
     c.setFillColor(C_GRAY)
-    c.drawString(PAD + 16, cursor + HDR_H - 48, f"{data['business_type']}  ·  {data['business_city']}")
+    c.drawString(PAD + 16, cursor + HDR_H - 40, f"{data['business_type']}  ·  {data['business_city']}")
 
     # Right side: "QUESO VENTURES" + doc type + date
     right_edge = PAD + inner_w - 16
@@ -729,7 +822,7 @@ def build_pdf(data, output_path):
     cursor -= 10
 
     # ── OVERALL SCORE + QUICK STATS ────────────────────────────────────────────
-    STATS_H = 62
+    STATS_H = 48
     cursor -= STATS_H
     rounded_rect(c, PAD, cursor, inner_w, STATS_H, r=8, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
 
@@ -737,56 +830,51 @@ def build_pdf(data, output_path):
     total_pct = int((total / 25) * 100)
     ov_col = score_color(total, 25)
 
-    # Overall score left block — outlined, no fill, saves ink
+    # Overall score left block
     c.setStrokeColor(ov_col)
     c.setLineWidth(2)
-    c.roundRect(PAD + 2, cursor + 2, 86, STATS_H - 4, 6, fill=0, stroke=1)
-    c.setFont("Helvetica-Bold", 26)
+    c.roundRect(PAD + 2, cursor + 2, 72, STATS_H - 4, 6, fill=0, stroke=1)
+    c.setFont("Helvetica-Bold", 20)
     c.setFillColor(ov_col)
-    c.drawCentredString(PAD + 45, cursor + STATS_H/2 - 9, f"{total_pct}%")
-    c.setFont("Helvetica", 7)
+    c.drawCentredString(PAD + 38, cursor + STATS_H/2 - 6, f"{total_pct}%")
+    c.setFont("Helvetica", 6)
     c.setFillColor(C_GRAY)
-    c.drawCentredString(PAD + 45, cursor + 9, "Visibility Score")
+    c.drawCentredString(PAD + 38, cursor + 7, "Visibility Score")
 
-    # Stats: rating, reviews, website, speed, seo
+    # Stats: rating, reviews, speed, seo
     seo_pct = data.get("client_seo_pct")
     stats = [
-        (data["review_rating"] + " ★",              "Google Rating"),
-        (str(data["review_count"]),                  "Reviews"),
-        ("✓ Yes" if data["has_website"] else "✗ No", "Has Website"),
-        (pct_label(data.get("client_ps")),           "Phone Speed"),
-        (pct_label(seo_pct),                         "SEO Score"),
+        (data["review_rating"] + " ★", "Google Rating"),
+        (str(data["review_count"]),     "Reviews"),
+        (pct_label(data.get("client_ps")), "Mobile Speed"),
+        (pct_label(seo_pct),            "SEO Score"),
     ]
-    stat_x = PAD + 100
-    stat_w = (inner_w - 106) / 5
+    stat_x = PAD + 86
+    stat_w = (inner_w - 92) / 4
     for i, (val, lbl) in enumerate(stats):
         sx = stat_x + i * stat_w
-        if lbl == "Phone Speed":
+        if lbl == "Mobile Speed":
             sc = pct_color(data.get("client_ps"))
         elif lbl == "SEO Score":
             sc = pct_color(seo_pct)
-        elif "✓" in val:
-            sc = C_GREEN
-        elif "✗" in val:
-            sc = C_RED
         else:
-            sc = C_BLACK   # rating and reviews — dark, readable on light card
-        c.setFont("Helvetica-Bold", 14)
+            sc = C_BLACK
+        c.setFont("Helvetica-Bold", 11)
         c.setFillColor(sc)
         c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 + 2, val)
-        c.setFont("Helvetica", 7)
+        c.setFont("Helvetica", 6)
         c.setFillColor(C_GRAY)
-        c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 - 14, lbl)
-        if i < 4:
+        c.drawCentredString(sx + stat_w/2, cursor + STATS_H/2 - 11, lbl)
+        if i < 3:
             c.setStrokeColor(C_LGRAY)
             c.setLineWidth(0.5)
-            c.line(sx + stat_w, cursor + 12, sx + stat_w, cursor + STATS_H - 12)
+            c.line(sx + stat_w, cursor + 8, sx + stat_w, cursor + STATS_H - 8)
 
-    cursor -= 10
+    cursor -= 8
 
     # ── SCORE BREAKDOWN + COMPETITOR (two columns) ─────────────────────────────
-    COL1_W = inner_w * 0.54
-    COL2_W = inner_w * 0.43
+    COL1_W = inner_w * 0.50
+    COL2_W = inner_w * 0.47
     COL_GAP = inner_w * 0.03
 
     categories = [
@@ -803,8 +891,8 @@ def build_pdf(data, output_path):
     COL1_CONTENT_H = SEC_LBL + BREAK_H + len(categories) * (ROW_H + 3) - 3
 
     # Competitor section height
-    COMP_ROWS   = 7   # header + 6 data rows
-    COMP_ROW_H  = 24
+    COMP_ROWS   = 6   # header + 5 data rows (removed Website row)
+    COMP_ROW_H  = 28
     COL2_CONTENT_H = SEC_LBL + BREAK_H + COMP_ROW_H + (COMP_ROWS - 1) * COMP_ROW_H + 24  # +24 for name caption below
 
     COL_H = max(COL1_CONTENT_H, COL2_CONTENT_H) + 16
@@ -871,13 +959,19 @@ def build_pdf(data, output_path):
         c.setFillColor(C_BLACK)
         c.drawCentredString(cx + (i + 0.5) * cw, tbl_y + COMP_HDR_H/2 - 3.5, lbl)
 
+    def ai_label(score):
+        """Plain outcome language for AI search visibility."""
+        if score is None: return "N/A"
+        if score >= 4:    return "Shows up"
+        if score == 3:    return "Sometimes"
+        return "Doesn't show up"
+
     comp_rows_data = [
-        ("Rating",      str(data["review_rating"]),               str(data["comp_rating"])),
-        ("Reviews",     str(data["review_count"]),                str(data["comp_reviews"])),
-        ("Website",     "Yes" if data["has_website"] else "No",   "Yes" if data["comp_has_site"] else "No"),
-        ("Phone Speed", pct_label(data.get("client_ps")),         pct_label(data.get("comp_ps"))),
-        ("SEO Score",   pct_label(data.get("client_seo_pct")),    pct_label(data.get("comp_seo_pct"))),
-        ("AI Search",   geo_label(data.get("geo_score")),         geo_label(data.get("comp_geo_score"))),
+        ("Rating",           str(data["review_rating"]),            str(data["comp_rating"])),
+        ("Reviews",          str(data["review_count"]),             str(data["comp_reviews"])),
+        ("Mobile Speed",     pct_label(data.get("client_ps")),      pct_label(data.get("comp_ps"))),
+        ("SEO Score",        pct_label(data.get("client_seo_pct")), pct_label(data.get("comp_seo_pct"))),
+        ("Found on AI Search", ai_label(data.get("geo_score")),     ai_label(data.get("comp_geo_score"))),
     ]
 
     dr_y = tbl_y - COMP_ROW_H
@@ -907,17 +1001,17 @@ def build_pdf(data, output_path):
         c.setFillColor(C_GRAY)
         c.drawString(cx + 8, dr_y + COMP_ROW_H/2 - 3.5, label)
 
-        # Color-code percentage and yes/no rows
-        if label in ("Phone Speed", "SEO Score"):
+        # Color-code percentage and outcome rows
+        if label in ("Mobile Speed", "SEO Score"):
             try: v1_col = pct_color(int(v1.replace("/100","")))
             except: v1_col = C_BLACK
             try: v2_col = pct_color(int(v2.replace("/100","")))
             except: v2_col = C_BLACK
-        elif label == "AI Search":
+        elif label == "Found on AI Search":
             def ai_col(v):
-                if v == "Yes":     return C_GREEN
-                if v == "Partial": return C_ORANGE
-                if v == "No":      return C_RED
+                if v == "Shows up":       return C_GREEN
+                if v == "Sometimes":      return C_ORANGE
+                if v == "Doesn't show up": return C_RED
                 return C_BLACK
             v1_col = ai_col(v1)
             v2_col = ai_col(v2)
@@ -942,124 +1036,76 @@ def build_pdf(data, output_path):
     c.setFillColor(C_GRAY)
     c.drawString(cx, dr_y - 2, caption)
 
-    cursor -= 10
-
-    # ── FINDINGS ──────────────────────────────────────────────────────────────
-    if data["findings"]:
-        cursor -= 8
+    # ── WHAT WE FOUND ─────────────────────────────────────────────────────────
+    if data.get("findings"):
+        cursor -= SEC_GAP
         c.setFont("Helvetica-Bold", 9)
         c.setFillColor(C_GRAY)
         c.drawString(PAD, cursor, "WHAT WE FOUND")
-        cursor -= 6
+        cursor -= LBL_GAP
 
-        # Core Web Vitals pills
-        cwv = data.get("client_cwv", {})
-        has_cwv_data = cwv and any(
-            m.get("rating", "N/A") != "N/A"
-            for m in cwv.values()
-        )
-        if has_cwv_data:
-            CWV_LABELS     = {"lcp": "Page Load", "fid": "Response Time", "cls": "Visual Stability"}
-            RATING_DISPLAY = {"FAST": "Good", "AVERAGE": "Fair", "SLOW": "Slow", "N/A": "N/A"}
-            RATING_COL     = {"FAST": C_GREEN, "AVERAGE": C_ORANGE, "SLOW": C_RED, "N/A": C_GRAY}
-            PILL_H   = 20
-            PILL_PAD = 8
-            GAP      = 8
-            cursor  -= PILL_H + 6
-
-            px = PAD
-            for key, lbl_text in CWV_LABELS.items():
-                metric      = cwv.get(key, {})
-                rating      = metric.get("rating", "N/A")
-                rating_disp = RATING_DISPLAY.get(rating, rating)
-                col         = RATING_COL.get(rating, C_GRAY)
-
-                lbl_w    = c.stringWidth(lbl_text,    "Helvetica-Bold", 7)
-                rating_w = c.stringWidth(rating_disp, "Helvetica-Bold", 7)
-                pill_w   = PILL_PAD + lbl_w + GAP + rating_w + PILL_PAD
-
-                rounded_rect(c, px, cursor, pill_w, PILL_H, r=PILL_H//2, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
-
-                c.setFont("Helvetica-Bold", 7)
-                c.setFillColor(C_BLACK)
-                c.drawString(px + PILL_PAD, cursor + PILL_H/2 - 3.5, lbl_text)
-
-                badge_x = px + PILL_PAD + lbl_w + GAP
-                badge_w = rating_w + PILL_PAD
-                rounded_rect(c, badge_x - 4, cursor + 3, badge_w + 4, PILL_H - 6, r=5, fill_color=col)
-                c.setFont("Helvetica-Bold", 7)
-                c.setFillColor(C_WHITE)
-                c.drawString(badge_x, cursor + PILL_H/2 - 3.5, rating_disp)
-
-                px += pill_w + 8
+        # Calculate a shared card height that fits all 4 findings in available space
+        available_h = cursor - PAGE_BOT - 10
+        card_gap    = 4
+        n_findings  = min(4, len(data["findings"]))
+        shared_h    = max(34, (available_h - (n_findings - 1) * card_gap) // n_findings)
 
         for finding in data["findings"][:4]:
-            words   = finding.split()
-            chars   = sum(len(w)+1 for w in words)
-            lines   = max(1, int(chars * 7.5 / (inner_w - 50)) + 1)
-            fnd_h   = max(28, lines * 13 + 10)
-
-            cursor -= fnd_h
-            rounded_rect(c, PAD, cursor, inner_w, fnd_h, r=6, fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
-
-            # Gray left accent
+            cursor -= shared_h
+            rounded_rect(c, PAD, cursor, inner_w, shared_h, r=6,
+                         fill_color=C_DARK, stroke_color=C_LGRAY, stroke_width=0.5)
             c.setFillColor(C_GRAY)
-            c.roundRect(PAD, cursor, 4, fnd_h, 2, fill=1, stroke=0)
+            c.roundRect(PAD, cursor, 4, shared_h, 2, fill=1, stroke=0)
+            wrap_text(c, finding, PAD + 16, cursor + shared_h - 12,
+                      inner_w - 36, font="Helvetica", size=8.5,
+                      color=C_BLACK, line_h=12)
+            cursor -= card_gap
 
-            # Text — starts further right, no icon
-            wrap_text(c, finding, PAD + 16, cursor + fnd_h - 11,
-                      inner_w - 30, font="Helvetica", size=8.5,
-                      color=C_BLACK, line_h=13)
-            cursor -= 4
+    # ── CTA — pinned to page bottom, tight equal margins ───────────────────
+    BOT_MARGIN = 16
+    CTA_H_NEW  = 58
+    CTA_Y      = BOT_MARGIN
 
-    # ── RECOMMENDATIONS ────────────────────────────────────────────────────────
-    if data["recommendations"]:
-        cursor -= 10
-        c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(C_GRAY)
-        c.drawString(PAD, cursor, "HOW TO FIX IT")
-        cursor -= 8
+    rounded_rect(c, PAD, CTA_Y, inner_w, CTA_H_NEW, r=8,
+                 fill_color=C_WHITE, stroke_color=C_LGRAY, stroke_width=1.0)
 
-        n     = len(data["recommendations"])
-        rec_w = (inner_w - (n-1)*6) / n
+    cx_mid = PAD + inner_w / 2
 
-        words_all = [r.split() for r in data["recommendations"]]
-        max_lines = max(max(1, int(sum(len(w)+1 for w in ws) * 7.5 / (rec_w - 24)) + 1)
-                        for ws in words_all)
-        rec_h = max(70, max_lines * 13 + 48)
-        cursor -= rec_h
+    c.setFont("Helvetica-Bold", 11)
+    c.setFillColor(C_BLACK)
+    c.drawCentredString(cx_mid, CTA_Y + CTA_H_NEW - 18, "Ready to show up more?")
 
-        for i, rec in enumerate(data["recommendations"]):
-            rx = PAD + i * (rec_w + 6)
-            rounded_rect(c, rx, cursor, rec_w, rec_h, r=8, fill_color=C_WHITE, stroke_color=C_LGRAY, stroke_width=0.5)
-
-            # Number — simple circle outline at top center
-            badge_r = 12
-            badge_cx = rx + rec_w / 2
-            badge_cy = cursor + rec_h - badge_r - 8
-            c.setStrokeColor(C_BLACK)
-            c.setFillColor(C_WHITE)
-            c.setLineWidth(1.2)
-            c.circle(badge_cx, badge_cy, badge_r, fill=1, stroke=1)
-
-            c.setFont("Helvetica-Bold", 11)
-            c.setFillColor(C_BLACK)
-            c.drawCentredString(badge_cx, badge_cy - 4, str(i + 1))
-
-            text_top = cursor + rec_h - badge_r * 2 - 20
-            wrap_text(c, rec, rx + 12, text_top,
-                      rec_w - 24, font="Helvetica", size=8.5,
-                      color=C_BLACK, line_h=13)
-
-        cursor -= 8
-
-    # ── FOOTER ────────────────────────────────────────────────────────────────
-    c.setStrokeColor(C_LGRAY)
-    c.setLineWidth(0.5)
-    c.line(PAD, 28, PAGE_W - PAD, 28)
-    c.setFont("Helvetica", 7)
+    c.setFont("Helvetica", 9)
     c.setFillColor(C_GRAY)
-    c.drawCentredString(PAGE_W / 2, 18, f"{CONTACT_EMAIL}  ·  {CONTACT_PHONE}")
+    c.drawCentredString(cx_mid, CTA_Y + CTA_H_NEW - 33,
+                        f"Send an email to {CONTACT_EMAIL}  or  call / text Emmanuel at {CONTACT_PHONE}")
+
+    c.setFont("Helvetica", 8)
+    c.setFillColor(C_BLACK)
+    c.drawCentredString(cx_mid, CTA_Y + 12, "quesoventures.com")
+
+    # ── AUTHORITY CARD — pinned directly above CTA, gap matches bottom margin ─
+    AUTH_GAP = BOT_MARGIN
+    AUTH_H   = 78
+    AUTH_Y   = CTA_Y + CTA_H_NEW + AUTH_GAP
+
+    AI_TEXT_L1 = "AI search doesn't work like Google — keywords don't move the needle."
+    AI_TEXT_L2 = (
+        "These engines read your entire web presence: structured data, citations, "
+        "and content that directly answers what people are actually searching for."
+    )
+    AI_TEXT_L3 = "Your next client is already out there searching. Make sure you're the one they find."
+
+    rounded_rect(c, PAD, AUTH_Y, inner_w, AUTH_H, r=8,
+                 fill_color=C_WHITE, stroke_color=C_LGRAY, stroke_width=0.5)
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(C_BLACK)
+    c.drawString(PAD + 18, AUTH_Y + AUTH_H - 18, AI_TEXT_L1)
+    wrap_text(c, AI_TEXT_L2, PAD + 18, AUTH_Y + AUTH_H - 32,
+              inner_w - 36, font="Helvetica", size=8.5, color=C_GRAY, line_h=13)
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(C_BLACK)
+    c.drawString(PAD + 18, AUTH_Y + 12, AI_TEXT_L3)
 
     c.save()
 
