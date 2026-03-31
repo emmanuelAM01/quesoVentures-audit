@@ -553,12 +553,17 @@ def collect_data():
         if not PAGESPEED_KEY: print("  Tip: set PAGESPEED_KEY env var for auto-scoring")
         data["speed_score"] = prompt("[CLIENT] Mobile Page Speed (score manually)", options=score_opts)
 
-    # GBP — plain language
-    print(f"\n  [CLIENT] Google Business Profile")
-    print("  Check Google: do they have photos, hours, description, and services filled out?")
-    _gbp_opts = ["No — profile is bare or missing", "Partially — some info but incomplete", "Yes — profile looks complete"]
-    _gbp_ans  = prompt("  How complete is their profile?", options=_gbp_opts)
-    data["gbp_score"] = {1: 2, 2: 3, 3: 5}[_gbp_ans]
+    # GBP — 4 options covering the "complete but wrong" case
+    print(f"\n  [CLIENT] Business Profile (Google Business)")
+    print("  Open their Google listing and check how it looks to a customer.")
+    _gbp_opts = [
+        "Not set up — profile is bare or missing entirely",
+        "Filled out but off — info is there but outdated, inaccurate, or missing key things",
+        "Set up but basic — correct info, nothing standing out, blends in with everyone else",
+        "Well set up — accurate, has photos, services listed, actively maintained",
+    ]
+    _gbp_ans  = prompt("  How does their profile look?", options=_gbp_opts)
+    data["gbp_score"] = {1: 1, 2: 2, 3: 3, 4: 5}[_gbp_ans]
 
     # Visibility — plain language
     print(f'\n  [CLIENT] Google Maps Visibility')
@@ -890,10 +895,11 @@ def build_pdf(data, output_path):
     BREAK_H = 8
     COL1_CONTENT_H = SEC_LBL + BREAK_H + len(categories) * (ROW_H + 3) - 3
 
-    # Competitor section height
-    COMP_ROWS   = 6   # header + 5 data rows (removed Website row)
-    COMP_ROW_H  = 28
-    COL2_CONTENT_H = SEC_LBL + BREAK_H + COMP_ROW_H + (COMP_ROWS - 1) * COMP_ROW_H + 24  # +24 for name caption below
+    # Competitor section height — 7 rows (header + 6 data) + verdict sentence
+    COMP_ROWS   = 7   # header + 6 data rows
+    COMP_ROW_H  = 23  # tighter rows to keep column height controlled
+    VERDICT_H   = 22  # space for the verdict sentence below caption
+    COL2_CONTENT_H = SEC_LBL + BREAK_H + COMP_ROW_H + (COMP_ROWS - 1) * COMP_ROW_H + 24 + VERDICT_H
 
     COL_H = max(COL1_CONTENT_H, COL2_CONTENT_H) + 16
 
@@ -960,18 +966,33 @@ def build_pdf(data, output_path):
         c.drawCentredString(cx + (i + 0.5) * cw, tbl_y + COMP_HDR_H/2 - 3.5, lbl)
 
     def ai_label(score):
-        """Plain outcome language for AI search visibility."""
         if score is None: return "N/A"
         if score >= 4:    return "Shows up"
         if score == 3:    return "Sometimes"
-        return "Doesn't show up"
+        return "Not showing up"
+
+    def vis_label(score):
+        """Search visibility — are they showing up when people search?"""
+        if score is None: return "N/A"
+        if score >= 4:    return "Visible"
+        if score == 3:    return "Inconsistent"
+        return "Missing"
+
+    def gbp_label(score):
+        """First impression — does the profile make people want to call?"""
+        if score is None: return "N/A"
+        if score >= 5:    return "Strong"
+        if score >= 3:    return "Basic"
+        if score >= 2:    return "Needs work"
+        return "Incomplete"
 
     comp_rows_data = [
-        ("Rating",           str(data["review_rating"]),            str(data["comp_rating"])),
-        ("Reviews",          str(data["review_count"]),             str(data["comp_reviews"])),
-        ("Mobile Speed",     pct_label(data.get("client_ps")),      pct_label(data.get("comp_ps"))),
-        ("SEO Score",        pct_label(data.get("client_seo_pct")), pct_label(data.get("comp_seo_pct"))),
-        ("Found on AI Search", ai_label(data.get("geo_score")),     ai_label(data.get("comp_geo_score"))),
+        ("Google Rating",      str(data["review_rating"]),        str(data["comp_rating"])),
+        ("Review Count",       str(data["review_count"]) + " reviews", str(data["comp_reviews"]) + " reviews"),
+        ("Phone Experience",   pct_label(data.get("client_ps")), pct_label(data.get("comp_ps"))),
+        ("Search Visibility",  vis_label(data.get("visibility_score")), vis_label(5)),
+        ("First Impression",   gbp_label(data.get("gbp_score")), gbp_label(5)),
+        ("Found on AI Search", ai_label(data.get("geo_score")),  ai_label(data.get("comp_geo_score"))),
     ]
 
     dr_y = tbl_y - COMP_ROW_H
@@ -1001,20 +1022,26 @@ def build_pdf(data, output_path):
         c.setFillColor(C_GRAY)
         c.drawString(cx + 8, dr_y + COMP_ROW_H/2 - 3.5, label)
 
-        # Color-code percentage and outcome rows
-        if label in ("Mobile Speed", "SEO Score"):
+        # Color-code rows by type
+        if label == "Phone Experience":
             try: v1_col = pct_color(int(v1.replace("/100","")))
             except: v1_col = C_BLACK
             try: v2_col = pct_color(int(v2.replace("/100","")))
             except: v2_col = C_BLACK
         elif label == "Found on AI Search":
-            def ai_col(v):
-                if v == "Shows up":       return C_GREEN
-                if v == "Sometimes":      return C_ORANGE
-                if v == "Doesn't show up": return C_RED
-                return C_BLACK
-            v1_col = ai_col(v1)
-            v2_col = ai_col(v2)
+            def _ai_col(v):
+                if v == "Shows up":    return C_GREEN
+                if v == "Sometimes":   return C_ORANGE
+                return C_RED
+            v1_col = _ai_col(v1)
+            v2_col = _ai_col(v2)
+        elif label in ("Search Visibility", "First Impression"):
+            def _outcome_col(v):
+                if v in ("Visible", "Strong"):       return C_GREEN
+                if v in ("Inconsistent", "Basic"):   return C_ORANGE
+                return C_RED
+            v1_col = _outcome_col(v1)
+            v2_col = _outcome_col(v2)
         else:
             v1_col = v2_col = C_BLACK
 
@@ -1035,6 +1062,30 @@ def build_pdf(data, output_path):
         caption = caption.rstrip() + "…"
     c.setFillColor(C_GRAY)
     c.drawString(cx, dr_y - 2, caption)
+
+    # Verdict sentence — ties the table to a business outcome
+    comp_short = data['comp_name'].split()[0:3]
+    comp_short = " ".join(comp_short)
+    verdict = (
+        f"{comp_short} is showing up in places you aren't yet — "
+        "every search where they appear and you don't is a client "
+        "choosing them by default. That's your room for growth."
+    )
+    c.setFont("Helvetica", 7)
+    c.setFillColor(C_BLACK)
+    # Word-wrap verdict into the column width
+    words = verdict.split()
+    line, vy = "", dr_y - 14
+    for w in words:
+        test = (line + " " + w).strip()
+        if c.stringWidth(test, "Helvetica", 7) <= COL2_W:
+            line = test
+        else:
+            c.drawString(cx, vy, line)
+            vy -= 10
+            line = w
+    if line:
+        c.drawString(cx, vy, line)
 
     # ── WHAT WE FOUND ─────────────────────────────────────────────────────────
     if data.get("findings"):
