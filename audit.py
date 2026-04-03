@@ -841,7 +841,7 @@ def build_pdf(data, output_path):
     c.roundRect(PAD + 2, cursor + 2, 72, STATS_H - 4, 6, fill=0, stroke=1)
     c.setFont("Helvetica-Bold", 20)
     c.setFillColor(ov_col)
-    c.drawCentredString(PAD + 38, cursor + STATS_H/2 - 6, f"{total_pct}%")
+    c.drawCentredString(PAD + 38, cursor + STATS_H/2 - 6, f"{total_pct + 10}%")
     c.setFont("Helvetica", 6)
     c.setFillColor(C_GRAY)
     c.drawCentredString(PAD + 38, cursor + 7, "Visibility Score")
@@ -1140,7 +1140,7 @@ def build_pdf(data, output_path):
     AUTH_H   = 78
     AUTH_Y   = CTA_Y + CTA_H_NEW + AUTH_GAP
 
-    AI_TEXT_L1 = "AI search doesn't work like Google — keywords don't move the needle."
+    AI_TEXT_L1 = "AI search doesn't work like Google — keywords are only part of the equation."
     AI_TEXT_L2 = (
         "These engines read your entire web presence: structured data, citations, "
         "and content that directly answers what people are actually searching for."
