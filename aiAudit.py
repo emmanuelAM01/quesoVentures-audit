@@ -23,10 +23,10 @@ FINDINGS = [
      "don't have a complete or consistent picture of your business."),
     ("orange",
      "Your services cover multiple specialties — but new patients searching "
-     "for any one of them aren't finding you as the obvious answer."),
+     "for any one of them aren't finding you as the obvious answer for them."),
     ("orange",
      "There are gaps between how patients try to reach you and how easy it actually is — "
-     "every gap is a potential new patient who moved on to someone else."),
+     "every gap is a potential new patient who went with someone else."),
 ]
 
 # ─────────────────────────────────────────────
@@ -34,10 +34,10 @@ FINDINGS = [
 # ─────────────────────────────────────────────
 PATIENT_TEXT = (
     "Your next patient isn't opening Google and typing keywords anymore. "
-    "They're asking questions — in an AI tool — like 'where can I get a weight loss shot near me' "
-    "or 'best clinic for IV therapy in my area.' These tools give one answer. Not a list of links. "
-    "One recommendation. The clinics in that answer are getting calls. "
-    "The ones that aren't don't exist to that patient."
+    "They're asking questions to AI like 'where can I get a weight loss shot near me' "
+    "or 'best clinic for IV therapy in my area.' These tools give one answer, not a list of links. "
+    "The clinics in that answer are getting calls, but "
+    "the ones that aren't don't exist to that patient."
 )
 
 OPT_A_TITLE = "AI Visibility Only"
@@ -58,8 +58,7 @@ AI_VIS_TEXT = (
     "three things: how consistently your business information appears across the internet, "
     "how clearly your services are described in places AI tools actually read, and how much "
     "trust your online presence has built up over time. This isn't something that happens "
-    "automatically, it's built intentionally. The window is still open, but the businesses "
-    "that move first will be the hardest to displace."
+    "automatically, it's built intentionally. Businesses that optimize for this now, will have a strong headstart."
 )
 
 AUTH_L1 = "AI search doesn't work like Google — keywords are only part of the equation."
