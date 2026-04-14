@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Queso Ventures — GEO/AEO Opportunity Document
-Usage: edit the config block below, then run: python geo_proposal.py
+Usage: edit the config block below, then run: python aiAudit.py
 """
 from datetime import date
 
 # ─────────────────────────────────────────────
 #  CONFIG — edit this per client
 # ─────────────────────────────────────────────
-BUSINESS_NAME = "Smart Choice Health and Wellness Clinic"
+BUSINESS_NAME = "Health is Wealth"
 BUSINESS_CITY = "Humble, TX"
 AUDIT_DATE    = date.today().strftime("%B %d, %Y")
 
@@ -48,7 +48,7 @@ OPT_A_DESC  = (
 
 OPT_B_TITLE = "New Site + AI Visibility"
 OPT_B_DESC  = (
-    "A rebuilt site designed for 2026. Fast, clear, and "
+    "A restructured site designed for 2026. Fast, clear, and "
     "optimized for AI search from day one."
 )
 
