@@ -13,8 +13,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 
-from webAudit import collect_data, calc_visibility_score
-from aiAudit  import (
+from NewwebAudit import collect_data, calc_visibility_score
+from NewaiAudit  import (
     get_competitor_rows,
     get_competitor_takeaway,
     get_score_factors,
