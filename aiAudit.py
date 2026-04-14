@@ -4,8 +4,8 @@ aiAudit.py  —  Queso Ventures
 All copy. Edit here. No PDF logic.
 
 Language rules:
-  - No "AI visibility", "AEO", "GEO", "ChatGPT" in client-facing prose
-  - Use "new search tools", "new ways customers search", "instead of Google"
+  - No "AEO", "GEO", "ChatGPT" in client-facing prose
+  - Use "new search tools", "AI tools" — plain language only
   - Always end on the solution or the opportunity — never on the problem alone
 """
 
@@ -55,7 +55,7 @@ def get_competitor_rows(
         if s == 3:    return "Sometimes"
         return "No"
     rows.append((
-        "Who comes up on new search tools?",
+        "Who gets recommended by AI tools?",
         geo_ans(client_geo), geo_ans(comp_geo),
         (client_geo or 0) >= 4, (comp_geo or 0) >= 4,
     ))
@@ -66,125 +66,179 @@ def get_competitor_rows(
 def get_competitor_takeaway(featured_query="", industry_term="customer"):
     """
     Two short lines below the comparison table.
-    Uses the featured service query to make it specific — no competitor name, no reviews.
     """
     if featured_query:
         line1 = f'When someone searches: "{featured_query}"'
     else:
-        line1 = "When someone uses a new search tool to find a business like yours —"
+        line1 = "When someone uses an AI tool to find a business like yours —"
     line2 = "AI tools give one answer, not a list. When it's your competitor, that call goes to them."
     return (line1, line2)
 
 
-def get_findings(
-    industry_term="customer",
-    has_website=True,
-    client_ps=None,
-    geo_score=1,
-    vis_score=1,
-    comp_name="",
-    client_reviews=0,
-    comp_reviews=0,
-    gbp_score=3,
-    featured_service="",
-):
+def get_score_factors(data, industry_term="customer"):
     """
-    Returns list of (headline, body) tuples — always 3 findings.
-    Tailored to the actual prospect data. Ends each finding on the solution.
+    Returns list of 2 (label, insight) tuples explaining the biggest score drivers.
+    Used in the "Your Visibility Score" section.
     """
-    findings = []
-    service  = featured_service if featured_service else f"{industry_term}s like yours"
+    factors = []
+    geo     = data.get("geo_score", 1)
+    rating  = data.get("review_rating", 0)
+    reviews = data.get("review_count", 0)
+    city    = data.get("business_city", "your area")
+    service = data.get("featured_service", f"{industry_term} services")
 
+    # Factor 1 — AI/geo visibility (35% of score — biggest single weight)
+    if geo <= 2:
+        factors.append((
+            "Not showing up on AI tools.",
+            f"When {industry_term}s in {city} search for {service}, your business isn't "
+            f"in the results. That's the biggest gap in your score.",
+        ))
+    elif geo == 3:
+        factors.append((
+            "Showing up sometimes — not consistently.",
+            f"You appear on AI tools occasionally, but not reliably. Consistency is what "
+            f"separates businesses that get recommended from ones that get skipped.",
+        ))
+    else:
+        factors.append((
+            "AI tools are finding you.",
+            f"You're showing up when {industry_term}s search in {city}. "
+            f"Keeping this consistent is what keeps you ahead.",
+        ))
+
+    # Factor 2 — reviews
     try:
-        c_rev = int(str(client_reviews).replace(",", ""))
-        t_rev = int(str(comp_reviews).replace(",", ""))
-        rev_gap = t_rev - c_rev
+        r   = float(str(rating))
+        cnt = int(str(reviews).replace(",", ""))
     except (ValueError, TypeError):
-        rev_gap = 0
+        r, cnt = 0, 0
 
-    # ── Finding 1 — new search visibility ────────────────────────────────────
-    if geo_score <= 2:
-        if rev_gap > 50:
-            findings.append((
-                f"When {industry_term}s search a new way, businesses with more signals show up first.",
-                f"Right now that's not you — and the review gap makes it worse. "
-                f"New search tools weigh consistency and volume across the whole internet, "
-                f"not just one platform. Queso Ventures builds that consistency for you.",
-            ))
-        else:
-            findings.append((
-                f"People searching for {service} a new way aren't finding you.",
-                f"When {industry_term}s skip Google and ask a new search tool, your business "
-                f"doesn't come up. Those are real people, ready to book, going somewhere else. "
-                f"Queso Ventures makes sure you're the name they find.",
-            ))
-    else:
-        findings.append((
-            f"You show up on new search tools sometimes — not every time.",
-            f"The {industry_term}s you miss on the days you don't appear don't come back. "
-            f"Queso Ventures turns 'sometimes' into 'every time.'",
+    if r >= 4.5 and cnt >= 50:
+        factors.append((
+            "Strong review profile.",
+            f"A {rating}\u2605 rating with {reviews} reviews is a genuine asset — AI tools "
+            f"factor both into who they recommend.",
         ))
-
-    # ── Finding 2 — website / foundation ─────────────────────────────────────
-    if not has_website:
-        findings.append((
-            "Without a website, new search tools have nothing to say about you.",
-            f"Every new search tool needs somewhere to point {industry_term}s. "
-            f"Without a site, even the things working in your favor can't do their job. "
-            f"Queso Ventures builds that foundation.",
-        ))
-    elif client_ps is not None and client_ps < 50:
-        findings.append((
-            f"Your site scores {client_ps}/100 on Google's speed test.",
-            f"A slow, outdated site doesn't just lose {industry_term}s who land on it — "
-            f"it signals to every search tool that your business isn't keeping up. "
-            f"Queso Ventures turns that signal around.",
+    elif cnt < 25:
+        factors.append((
+            "Review volume is a gap.",
+            f"Fewer reviews means less signal for AI tools to work with. "
+            f"Volume and recency both affect whether you show up.",
         ))
     else:
-        findings.append((
-            "Your Google listing covers about 30% of where new search tools look.",
-            f"The other 70% — online directories, citations, how you're described "
-            f"across dozens of sites — is where most businesses go invisible. "
-            f"Queso Ventures fills those gaps.",
+        factors.append((
+            f"Solid rating at {rating}\u2605.",
+            f"Your reviews are working in your favor. The opportunity is in the places "
+            f"AI tools look that Google doesn't cover.",
         ))
 
-    # ── Finding 3 — the hook ─────────────────────────────────────────────────
-    findings.append((
-        "Your current marketing gets you noticed. Queso Ventures gets you found.",
-        f"Marketing controls how you look when someone finds you. "
-        f"What's different now is that 'finding you' happens on tools your marketing "
-        f"doesn't reach. That's the gap Queso Ventures is built to close.",
-    ))
-
-    return findings
+    return factors
 
 
-def get_explainer(industry_term="customer"):
+def get_why_losing(industry_term="customer", city="your area", featured_service=""):
     """
-    Returns a structured dict for the WHY THIS IS HAPPENING section.
-    Rendered in main.py as: callout box (intro + bold statement) + 3 horizontal cards.
-    All copy is hardcoded — same message for every client.
-    Cards: number + title on same line in main.py.
+    Single paragraph explaining the mechanism — cookie-cutter with keyword substitution.
     """
-    intro = "AI tools read your reviews, listings, and every mention of your business online."
-    statement = "The most complete, consistent presence gets recommended. Gaps get passed over."
+    service = featured_service if featured_service else f"{industry_term} services"
+    return (
+        f"When a {industry_term} in {city} asks an AI tool for {service}, it picks one business — "
+        f"not a list. It looks at reviews, listings, and how complete your presence is across the web. "
+        f"The most consistent presence gets recommended. Gaps mean you get skipped."
+    )
 
-    cards = [
+
+def get_aeo_cards():
+    """
+    Returns list of 3 (title, body) tuples for the "What Changes This" education section.
+    Explains AEO/GEO principles in plain business-owner language.
+    """
+    return [
         (
-            "AI Makes the Call",
-            "Reviews, listings, citations — AI tools cross-reference all of them to pick one business.",
+            "One Answer, Not a List",
+            "AI tools return one recommendation. Getting there means your presence has to be "
+            "complete — reviews, listings, and citations all pointing at you.",
+        ),
+        (
+            "Consistency Over Spend",
+            "AI tools don't rank by ad budget. They rank by how consistent and complete your "
+            "information is across every platform they read from.",
         ),
         (
             "The Window Is Open",
-            "Most businesses in your area haven't built this presence yet.",
-        ),
-        (
-            "We Build It For You",
-            "Results compound gradually. You gain ground every week.",
+            "Most businesses in your area haven't built this yet. First to build it becomes "
+            "the default answer — until someone catches up.",
         ),
     ]
 
-    return {"intro": intro, "statement": statement, "cards": cards}
+
+def get_client_snapshot(data, industry_term="customer"):
+    """
+    Returns list of 3 (value, label, insight) tuples using the client's actual data.
+    Used in the "Your Numbers" section.
+    """
+    rows      = []
+    comp_name = data.get("comp_name", "your competitor")
+    city      = data.get("business_city", "your area")
+
+    # Row 1 — reviews vs competitor
+    try:
+        mine   = int(str(data.get("review_count", 0)).replace(",", ""))
+        theirs = int(str(data.get("comp_reviews", 0)).replace(",", ""))
+        gap    = theirs - mine
+    except (ValueError, TypeError):
+        mine, theirs, gap = 0, 0, 0
+
+    if gap > 50:
+        insight = (f"{comp_name} has {gap} more reviews. AI tools weight volume and recency "
+                   f"— that gap is showing up in your score.")
+    elif gap > 0:
+        insight = (f"{comp_name} has a slight review lead. Closing that gap moves the needle "
+                   f"on AI recommendations.")
+    else:
+        insight = ("You're holding your own on reviews. Keeping the volume growing is what "
+                   "sustains the advantage.")
+    rows.append((str(mine), "Your Reviews", insight))
+
+    # Row 2 — AI visibility status
+    geo       = data.get("geo_score", 1)
+    geo_label = "Showing Up" if geo >= 4 else "Partial" if geo == 3 else "Not Visible"
+    if geo <= 2:
+        ai_insight = (f"AI tools aren't surfacing your business when {industry_term}s search "
+                      f"in {city}. This is the single biggest lever in your score.")
+    elif geo == 3:
+        ai_insight = ("You show up some of the time. The gap between 'sometimes' and 'every "
+                      "time' is a more complete presence.")
+    else:
+        ai_insight = ("You're showing up on AI tools. Maintaining this means keeping your "
+                      "presence fresh and consistent.")
+    rows.append((geo_label, "AI Visibility", ai_insight))
+
+    # Row 3 — website speed or GBP photos
+    ps = data.get("client_ps")
+    if ps is not None:
+        ps_val   = f"{ps}/100"
+        ps_label = "Site Speed"
+        if ps >= 70:
+            ps_insight = ("Your site loads fast — that's a positive signal. AI tools factor "
+                          "site quality into their reads.")
+        elif ps >= 50:
+            ps_insight = ("Your site is middling on speed. A slow site signals to AI tools "
+                          "that your business isn't keeping up.")
+        else:
+            ps_insight = (f"A {ps}/100 speed score is holding you back. AI tools read site "
+                          f"quality as a proxy for business quality.")
+        rows.append((ps_val, ps_label, ps_insight))
+    else:
+        photos    = data.get("gbp_photo_count", 0)
+        ph_insight = (
+            "Strong photo count — your listing looks active, which AI tools favor."
+            if photos >= 10 else
+            "Thin photo count signals an incomplete listing. AI tools weight listing completeness."
+        )
+        rows.append((str(photos), "Profile Photos", ph_insight))
+
+    return rows
 
 
 def get_cta_headline():
