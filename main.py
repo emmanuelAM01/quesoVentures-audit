@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-main.py  —  Queso Ventures Audit  (v9)
+main.py  —  Queso Ventures Audit  (v13)
 Usage:  source .env && python main.py
 
-7 sections: Header → Score Factors → Comparison → Why Losing → AEO Education → Client Snapshot → CTA
-No stats bar. Contact info lives in the header. Everything readable — no light gray subtext.
+Spacing model:
+  - Every section height is measured before drawing.
+  - Total content height is summed.
+  - Remaining vertical space is divided evenly between all inter-section gaps.
+  - Result: content fills the page naturally with uniform breathing room.
+  - Minimum gap enforced at 8pt so nothing ever crams together.
 """
 
 import os
@@ -13,14 +17,12 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 
-from NewwebAudit import collect_data, calc_visibility_score
-from NewaiAudit  import (
+from NewaiAudit import (
     get_competitor_rows,
     get_competitor_takeaway,
-    get_score_factors,
-    get_why_losing,
-    get_aeo_cards,
-    get_client_snapshot,
+    get_findings,
+    get_outcome,
+    get_differentiator,
     get_cta_headline,
 )
 
@@ -31,13 +33,13 @@ C_BLACK  = colors.HexColor("#1A1A1A")
 C_WHITE  = colors.HexColor("#FFFFFF")
 C_GRAY   = colors.HexColor("#767676")
 C_LGRAY  = colors.HexColor("#D8D8D4")
-C_DGRAY  = colors.HexColor("#444444")
+C_DGRAY  = colors.HexColor("#3A3A3A")
 C_RED    = colors.HexColor("#C4161C")
 C_ORANGE = colors.HexColor("#D4720A")
 C_GREEN  = colors.HexColor("#1A7A3C")
 
 PAGE_W, PAGE_H = letter
-PAD = 40
+PAD = 38
 
 CONTACT_EMAIL = "hello@quesoventures.com"
 CONTACT_PHONE = "(281) 203-4531"
@@ -45,6 +47,18 @@ CONTACT_SITE  = "quesoventures.com"
 
 LOGO_URL  = "https://www.quesoventures.com/logo.png"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".qv_logo.png")
+
+# CTA footer: light rule + 3 text lines, pinned near bottom
+CTA_RULE_Y  = 48    # y of the rule from page bottom
+CTA_LINES   = 3     # headline + phone + email
+CTA_LINE_H  = 14
+
+# Section label height
+SEC_LABEL_H = 8     # label text + gap below it
+
+# Minimum and maximum inter-section gaps
+GAP_MIN = 10
+GAP_MAX = 22
 
 
 def ensure_logo():
@@ -54,8 +68,7 @@ def ensure_logo():
         import requests
         r = requests.get(LOGO_URL, timeout=10)
         if r.status_code == 200:
-            with open(LOGO_PATH, "wb") as f:
-                f.write(r.content)
+            with open(LOGO_PATH, "wb") as f: f.write(r.content)
             return LOGO_PATH
     except Exception:
         pass
@@ -70,26 +83,24 @@ def rrect(c, x, y, w, h, r=6, fill=None, stroke=None, sw=0.5):
     if stroke: c.setStrokeColor(stroke); c.setLineWidth(sw)
     else:      c.setLineWidth(0)
     p = c.beginPath()
-    p.moveTo(x+r, y);           p.lineTo(x+w-r, y)
-    p.arcTo(x+w-2*r, y,         x+w, y+2*r,        startAng=-90, extent=90)
+    p.moveTo(x+r, y);          p.lineTo(x+w-r, y)
+    p.arcTo(x+w-2*r, y,        x+w,    y+2*r,    startAng=-90, extent=90)
     p.lineTo(x+w, y+h-r)
-    p.arcTo(x+w-2*r, y+h-2*r,  x+w, y+h,           startAng=0,   extent=90)
+    p.arcTo(x+w-2*r, y+h-2*r, x+w,    y+h,      startAng=0,   extent=90)
     p.lineTo(x+r, y+h)
-    p.arcTo(x,    y+h-2*r,     x+2*r, y+h,          startAng=90,  extent=90)
+    p.arcTo(x,    y+h-2*r,    x+2*r,  y+h,      startAng=90,  extent=90)
     p.lineTo(x, y+r)
-    p.arcTo(x,    y,            x+2*r, y+2*r,        startAng=180, extent=90)
+    p.arcTo(x,    y,           x+2*r,  y+2*r,   startAng=180, extent=90)
     p.close()
     c.drawPath(p, fill=1 if fill else 0, stroke=1 if stroke else 0)
 
 
-def wraptext(c, txt, x, y, maxw, font="Helvetica", size=9, color=C_BLACK, lh=13):
-    """Draw word-wrapped text. Returns y after last line."""
+def wraptext(c, txt, x, y, maxw, font="Helvetica", size=9, color=C_DGRAY, lh=13):
     c.setFont(font, size); c.setFillColor(color)
     words = txt.split(); line = ""; cy = y
     for w in words:
         t = (line + " " + w).strip()
-        if c.stringWidth(t, font, size) <= maxw:
-            line = t
+        if c.stringWidth(t, font, size) <= maxw: line = t
         else:
             if line: c.drawString(x, cy, line); cy -= lh
             line = w
@@ -98,7 +109,6 @@ def wraptext(c, txt, x, y, maxw, font="Helvetica", size=9, color=C_BLACK, lh=13)
 
 
 def texth(c, txt, maxw, font="Helvetica", size=9, lh=13):
-    """Estimate pixel height of word-wrapped text block."""
     words = txt.split(); lines = 1; line = ""
     for w in words:
         t = (line + " " + w).strip()
@@ -108,326 +118,342 @@ def texth(c, txt, maxw, font="Helvetica", size=9, lh=13):
 
 
 def sec_label(c, x, y, txt):
-    c.setFont("Helvetica-Bold", 7.5)
-    c.setFillColor(C_GRAY)
+    c.setFont("Helvetica-Bold", 7.5); c.setFillColor(C_DGRAY)
     c.drawString(x, y, txt.upper())
 
 
-def rule(c, x, y, w, color=C_LGRAY, lw=0.5):
-    c.setStrokeColor(color); c.setLineWidth(lw)
-    c.line(x, y, x + w, y)
+def hrule(c, x, y, w, color=C_LGRAY, lw=0.4):
+    c.setStrokeColor(color); c.setLineWidth(lw); c.line(x, y, x + w, y)
 
 
-# ─────────────────────────────────────────────
-#  GAUGE
-# ─────────────────────────────────────────────
 def draw_gauge(c, cx, cy, pct, r=22):
-    """Semi-arc gauge. Arc stroke + score text are the only colored ink."""
-    c.setStrokeColor(C_LGRAY); c.setLineWidth(3.5)
-    c.arc(cx - r, cy - r, cx + r, cy + r, startAng=200, extent=-220)
+    c.setStrokeColor(C_LGRAY); c.setLineWidth(4)
+    c.arc(cx-r, cy-r, cx+r, cy+r, startAng=200, extent=-220)
     col = C_RED if pct < 40 else C_ORANGE if pct < 68 else C_GREEN
-    c.setStrokeColor(col); c.setLineWidth(3.5)
-    c.arc(cx - r, cy - r, cx + r, cy + r, startAng=200, extent=-(pct / 100 * 220))
-    c.setFont("Helvetica-Bold", 14); c.setFillColor(col)
+    c.setStrokeColor(col); c.setLineWidth(4)
+    c.arc(cx-r, cy-r, cx+r, cy+r, startAng=200, extent=-(pct/100*220))
+    c.setFont("Helvetica-Bold", 15); c.setFillColor(col)
     c.drawCentredString(cx, cy - 4, f"{pct}%")
-    c.setFont("Helvetica", 6); c.setFillColor(C_GRAY)
+    c.setFont("Helvetica", 6.5); c.setFillColor(C_GRAY)
     c.drawCentredString(cx, cy - 14, "Visibility Score")
 
 
-# ─────────────────────────────────────────────
-#  CHIP  (comparison table answer)
-# ─────────────────────────────────────────────
-def draw_chip(c, cx, y, text, good):
-    if text in ("N/A", "?"):
-        border = C_LGRAY; tcol = C_GRAY
-    elif text == "Sometimes":
-        border = C_ORANGE; tcol = C_ORANGE
-    elif good:
-        border = C_GREEN; tcol = C_GREEN
-    else:
-        border = C_RED; tcol = C_RED
-    rrect(c, cx - 46, y + 7, 92, 20, r=4, fill=C_WHITE, stroke=border, sw=1.2)
-    c.setFont("Helvetica-Bold", 9.5); c.setFillColor(tcol)
-    c.drawCentredString(cx, y + 18, text)
+CHIP_W = 86; CHIP_H = 22; CHIP_R = 4
+
+def draw_chip(c, cx, cell_y, cell_h, text, good):
+    if text in ("N/A", "?"):  border = C_LGRAY; tcol = C_GRAY
+    elif text == "Sometimes": border = C_ORANGE; tcol = C_ORANGE
+    elif good:                border = C_GREEN;  tcol = C_GREEN
+    else:                     border = C_RED;    tcol = C_RED
+    chip_x = cx - CHIP_W / 2
+    chip_y = cell_y + (cell_h - CHIP_H) / 2
+    rrect(c, chip_x, chip_y, CHIP_W, CHIP_H, r=CHIP_R, fill=C_WHITE, stroke=border, sw=1.2)
+    c.setFont("Helvetica-Bold", 9); c.setFillColor(tcol)
+    c.drawCentredString(cx, chip_y + CHIP_H/2 - 3.5, text)
 
 
 # ─────────────────────────────────────────────
-#  BUILD
+#  MEASURE all section heights before drawing
+# ─────────────────────────────────────────────
+def measure_sections(cv, iw, data, comp_rows, findings, out_head, out_buls, diff_head, diff_buls):
+    """
+    Returns dict of section_name -> pixel height.
+    All heights measured from content only — gaps not included.
+    """
+    heights = {}
+
+    # 1. Header — fixed
+    heights["header"] = 64
+
+    # 2. Stack up = plates + col headers + 3 rows + takeaway
+    PLATE_H    = 42
+    COL_HDR_H  = 18
+    COMP_ROW_H = 34
+    TK_H       = 48
+    heights["stackup"] = (
+        SEC_LABEL_H + PLATE_H + COL_HDR_H +
+        len(comp_rows) * COMP_ROW_H + 8 + TK_H
+    )
+
+    # 3. Findings
+    finding_total = SEC_LABEL_H
+    for f in findings:
+        fh = texth(cv, f, iw - 26, font="Helvetica", size=8.5, lh=13) + 22
+        finding_total += fh + 6
+    heights["findings"] = finding_total
+
+    # 4. How Searching Works Now
+    LINE_H = 16
+    heights["outcome"] = SEC_LABEL_H + 16 + len(out_buls) * LINE_H + 14
+
+    # 5. Differentiator — base only; slack absorbed at draw time
+    DIFF_LINE_H = 16
+    heights["diff"] = 18 + 10 + len(diff_buls) * DIFF_LINE_H + 14
+
+    return heights
+
+
+# ─────────────────────────────────────────────
+#  BUILD PDF
 # ─────────────────────────────────────────────
 def build_pdf(data, output_path):
     logo = ensure_logo()
     cv   = canvas.Canvas(output_path, pagesize=letter)
-    iw   = PAGE_W - 2 * PAD   # 532pt
+    iw   = PAGE_W - 2 * PAD
     term = data.get("industry_term", "customer")
 
     cv.setFillColor(C_WHITE); cv.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-    # ─────────────────────────────────────────
-    #  SECTION CONSTANTS
-    # ─────────────────────────────────────────
-    HDR_H           = 64
-    SCORE_FACTORS_H = 68
-    COMP_PLATES_H   = 50
-    COMP_ROW_H      = 28
-    N_COMP_ROWS     = 3
-    TAKEAWAY_H      = 42
-    WHY_PARA_H      = 44
-    AEO_CARD_H      = 46
-    SNAP_ROW_H      = 24
-    cta_h           = 66
+    from NewwebAudit import calc_visibility_score
+    vis_pct = data.get("visibility_pct", calc_visibility_score(data))
 
-    # ─────────────────────────────────────────
-    #  PRE-FETCH CONTENT
-    # ─────────────────────────────────────────
-    vis_pct   = data.get("visibility_pct", calc_visibility_score(data))
-    comp_rows = get_competitor_rows(
-        data["comp_name"], data["review_count"], data["comp_reviews"],
-        term,
+    comp_rows            = get_competitor_rows(
+        data["comp_name"], data["review_count"], data["comp_reviews"], term,
         data.get("visibility_score", 1), data.get("comp_vis_score", 5),
         data.get("geo_score", 1),        data.get("comp_geo_score", 5),
     )
-    (tk_line1, tk_line2) = get_competitor_takeaway(data.get("featured_query", ""), term)
-    factors  = get_score_factors(data, term)
-    why_text = get_why_losing(
-        term,
-        data.get("business_city", "your area"),
-        data.get("featured_service", ""),
-    )
-    aeo_cards = get_aeo_cards()
-    snapshot  = get_client_snapshot(data, term)
+    tk_line1, tk_line2   = get_competitor_takeaway(data.get("featured_query", ""), term)
+    findings             = data.get("_findings", get_findings(data))
+    out_head, out_buls   = get_outcome(data)
+    diff_head, diff_buls = get_differentiator(term)
+    bname                = data["business_name"]
+    city                 = data.get("business_city", "")
 
-    bname = data["business_name"]
-    city  = data.get("business_city", "")
+    # ── measure ──────────────────────────────────────────────────────────────
+    hts = measure_sections(cv, iw, data, comp_rows, findings,
+                           out_head, out_buls, diff_head, diff_buls)
 
-    # ─────────────────────────────────────────
-    #  DRAW
-    # ─────────────────────────────────────────
-    cursor = PAGE_H - 16
+    # Available vertical space: from top margin to CTA rule, minus header
+    TOP_MARGIN    = 14
+    usable_h      = PAGE_H - TOP_MARGIN - hts["header"] - (PAGE_H - CTA_RULE_Y) - 4
+    content_h     = hts["stackup"] + hts["findings"] + hts["outcome"] + hts["diff"]
+    n_gaps        = 4   # gaps: after header, after stackup, after findings, after outcome
+    gap           = max(GAP_MIN, min(GAP_MAX, (usable_h - content_h) / n_gaps))
 
-    # ── 1. HEADER ────────────────────────────────────────────────────────────
+    # ── draw ─────────────────────────────────────────────────────────────────
+    cursor = PAGE_H - TOP_MARGIN
+
+    # ═══════════════════════════════════════════════════════
+    #  1. HEADER
+    # ═══════════════════════════════════════════════════════
+    HDR_H    = hts["header"]
+    GAUGE_R  = 22
+    GAUGE_CX = PAGE_W / 2
+    LEFT_MAX_W = GAUGE_CX - GAUGE_R - 12 - (PAD + 14)
+
     cursor -= HDR_H
     rrect(cv, PAD, cursor, iw, HDR_H, r=8, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
+    draw_gauge(cv, GAUGE_CX, cursor + HDR_H - 30, vis_pct, r=GAUGE_R)
 
-    r_gauge  = 22
-    cy_gauge = cursor + HDR_H - 30
-    draw_gauge(cv, PAGE_W / 2, cy_gauge, vis_pct, r=r_gauge)
-
-    name_y     = cy_gauge - 4
-    subtitle_y = name_y - 14
-
-    # Left zone: business name + city
+    # Left — name
+    name_y = cursor + HDR_H - 19
+    sub_y  = cursor + HDR_H - 33
     ns = 15
-    while cv.stringWidth(bname, "Helvetica-Bold", ns) > iw * 0.38 and ns > 9:
+    while cv.stringWidth(bname, "Helvetica-Bold", ns) > LEFT_MAX_W and ns > 9:
         ns -= 0.5
+    dn = bname
+    if cv.stringWidth(dn, "Helvetica-Bold", ns) > LEFT_MAX_W:
+        while cv.stringWidth(dn + "\u2026", "Helvetica-Bold", ns) > LEFT_MAX_W and len(dn) > 4:
+            dn = dn[:-1]
+        dn += "\u2026"
     cv.setFont("Helvetica-Bold", ns); cv.setFillColor(C_BLACK)
-    cv.drawString(PAD + 14, name_y, bname)
-    cv.setFont("Helvetica", 8.5); cv.setFillColor(C_DGRAY)
-    cv.drawString(PAD + 14, subtitle_y, city)
+    cv.drawString(PAD + 14, name_y, dn)
+    cv.setFont("Helvetica", 8); cv.setFillColor(C_GRAY)
+    cv.drawString(PAD + 14, sub_y, city)
+    cv.setFont("Helvetica", 7.5); cv.setFillColor(C_GRAY)
+    cv.drawString(PAD + 14, sub_y - 13,
+                  data.get("audit_date", date.today().strftime("%B %d, %Y")))
 
-    # Right zone: logo + brand, phone, email·site
-    re = PAD + iw - 14
-    cv.setFont("Helvetica-Bold", 9.5)
+    # Right — QV brand
+    re  = PAD + iw - 14
     qvw = cv.stringWidth("Queso Ventures", "Helvetica-Bold", 9.5)
+    RIGHT_ZONE_X = GAUGE_CX + GAUGE_R + 12
     if logo:
         LW = LH = 14
         bx = re - LW - 5 - qvw
-        cv.drawImage(logo, bx, name_y - 3, width=LW, height=LH,
-                     preserveAspectRatio=True, mask="auto")
-        cv.setFillColor(C_BLACK); cv.drawString(bx + LW + 5, name_y, "Queso Ventures")
+        if bx >= RIGHT_ZONE_X:
+            cv.drawImage(logo, bx, name_y - 2, width=LW, height=LH,
+                         preserveAspectRatio=True, mask="auto")
+            cv.setFont("Helvetica-Bold", 9.5); cv.setFillColor(C_BLACK)
+            cv.drawString(bx + LW + 5, name_y, "Queso Ventures")
+        else:
+            cv.setFont("Helvetica-Bold", 9.5); cv.setFillColor(C_BLACK)
+            cv.drawRightString(re, name_y, "Queso Ventures")
     else:
-        cv.setFillColor(C_BLACK); cv.drawRightString(re, name_y, "Queso Ventures")
-    cv.setFont("Helvetica-Bold", 8); cv.setFillColor(C_ORANGE)
-    cv.drawRightString(re, subtitle_y, CONTACT_PHONE)
-    cv.setFont("Helvetica", 7); cv.setFillColor(C_GRAY)
-    cv.drawRightString(re, subtitle_y - 12, f"{CONTACT_EMAIL}  ·  {CONTACT_SITE}")
-
-    cursor -= 8
-
-    # ── 2. SCORE FACTORS ─────────────────────────────────────────────────────
-    cursor -= SCORE_FACTORS_H
-    sec_label(cv, PAD, cursor + SCORE_FACTORS_H - 2, "Your Visibility Score")
-
-    row_start = cursor + SCORE_FACTORS_H - 18
-    for i, (lbl, insight) in enumerate(factors):
-        ry = row_start - i * 30
-        # Orange accent bar
-        cv.setFillColor(C_ORANGE)
-        cv.rect(PAD, ry - 16, 3, 22, fill=1, stroke=0)
-        # Label (bold) + insight (regular) on two lines
         cv.setFont("Helvetica-Bold", 9.5); cv.setFillColor(C_BLACK)
-        cv.drawString(PAD + 10, ry, lbl)
-        cv.setFont("Helvetica", 8.5); cv.setFillColor(C_DGRAY)
-        cv.drawString(PAD + 10, ry - 12, insight)
-        if i == 0:
-            rule(cv, PAD + 10, ry - 21, iw - 10, color=C_LGRAY, lw=0.3)
+        cv.drawRightString(re, name_y, "Queso Ventures")
+    cv.setFont("Helvetica-Bold", 8); cv.setFillColor(C_ORANGE)
+    cv.drawRightString(re, sub_y, CONTACT_PHONE)
+    cv.setFont("Helvetica", 7.5); cv.setFillColor(C_GRAY)
+    cv.drawRightString(re, sub_y - 13, f"{CONTACT_EMAIL}  .  {CONTACT_SITE}")
 
-    cursor -= 12
-
-    # ── 3. HOW YOU STACK UP ──────────────────────────────────────────────────
+    cursor -= gap + 8
+    # ═══════════════════════════════════════════════════════
     sec_label(cv, PAD, cursor, "How You Stack Up")
-    cursor -= 8
+    cursor -= SEC_LABEL_H
 
     # Name plates
-    cursor -= COMP_PLATES_H
+    PLATE_H = 42
+    cursor -= PLATE_H
     half_w = (iw - 4) / 2
-    lx = PAD
-    rx = PAD + half_w + 4
+    lx = PAD; rx = PAD + half_w + 4
 
-    rrect(cv, lx, cursor, half_w, COMP_PLATES_H, r=8, fill=C_WHITE, stroke=C_ORANGE, sw=1.5)
+    rrect(cv, lx, cursor, half_w, PLATE_H, r=8, fill=C_WHITE, stroke=C_ORANGE, sw=1.5)
     cv.setFont("Helvetica-Bold", 7); cv.setFillColor(C_ORANGE)
-    cv.drawString(lx + 8, cursor + COMP_PLATES_H - 11, "YOU")
-    bname_ns = 11
-    while cv.stringWidth(bname, "Helvetica-Bold", bname_ns) > half_w - 20 and bname_ns > 7.5:
-        bname_ns -= 0.5
-    cv.setFont("Helvetica-Bold", bname_ns); cv.setFillColor(C_BLACK)
-    cv.drawCentredString(lx + half_w / 2, cursor + COMP_PLATES_H / 2 + 2, bname)
-    cv.setFont("Helvetica", 7); cv.setFillColor(C_GRAY)
-    cv.drawCentredString(lx + half_w / 2, cursor + COMP_PLATES_H / 2 - 9,
-                         f"{data['review_rating']} \u2605  \u00b7  {data['review_count']} reviews")
+    cv.drawString(lx + 10, cursor + PLATE_H - 12, "YOU")
+    ns2 = 10
+    while cv.stringWidth(bname, "Helvetica-Bold", ns2) > half_w - 20 and ns2 > 7.5:
+        ns2 -= 0.5
+    cv.setFont("Helvetica-Bold", ns2); cv.setFillColor(C_BLACK)
+    cv.drawCentredString(lx + half_w/2, cursor + PLATE_H/2 + 2, bname)
+    cv.setFont("Helvetica", 7.5); cv.setFillColor(C_GRAY)
+    cv.drawCentredString(lx + half_w/2, cursor + PLATE_H/2 - 9,
+                         f"{data['review_rating']} \u2605  .  {data['review_count']} reviews")
 
-    rrect(cv, rx, cursor, half_w, COMP_PLATES_H, r=8, fill=C_WHITE, stroke=C_LGRAY, sw=1)
-    cv.setFont("Helvetica-Bold", 7); cv.setFillColor(C_GRAY)
-    cv.drawString(rx + 8, cursor + COMP_PLATES_H - 11, "THEM")
     cname = data["comp_name"]
-    cname_ns = 10
-    while cv.stringWidth(cname, "Helvetica-Bold", cname_ns) > half_w - 20 and cname_ns > 7.5:
-        cname_ns -= 0.5
-    cv.setFont("Helvetica-Bold", cname_ns); cv.setFillColor(C_DGRAY)
-    cv.drawCentredString(rx + half_w / 2, cursor + COMP_PLATES_H / 2 + 2, cname)
-    cv.setFont("Helvetica", 7); cv.setFillColor(C_GRAY)
-    cv.drawCentredString(rx + half_w / 2, cursor + COMP_PLATES_H / 2 - 9,
-                         f"{data.get('comp_rating', '?')} \u2605  \u00b7  {data.get('comp_reviews', '?')} reviews")
+    rrect(cv, rx, cursor, half_w, PLATE_H, r=8, fill=C_WHITE, stroke=C_LGRAY, sw=1)
+    cv.setFont("Helvetica-Bold", 7); cv.setFillColor(C_GRAY)
+    cv.drawString(rx + 10, cursor + PLATE_H - 12, "THEM")
+    ns3 = 10
+    while cv.stringWidth(cname, "Helvetica-Bold", ns3) > half_w - 20 and ns3 > 7.5:
+        ns3 -= 0.5
+    cv.setFont("Helvetica-Bold", ns3); cv.setFillColor(C_DGRAY)
+    cv.drawCentredString(rx + half_w/2, cursor + PLATE_H/2 + 2, cname)
+    cv.setFont("Helvetica", 7.5); cv.setFillColor(C_GRAY)
+    cv.drawCentredString(rx + half_w/2, cursor + PLATE_H/2 - 9,
+                         f"{data.get('comp_rating','?')} \u2605  .  {data.get('comp_reviews','?')} reviews")
 
+    # Column headers — generous space above them
     cursor -= 10
-
-    # Column headers
     Q_W   = iw * 0.52
     A_W   = iw * 0.24
     MID_X = PAD + Q_W + A_W * 0.5
     THM_X = PAD + Q_W + A_W * 1.5
-
-    cv.setFont("Helvetica-Bold", 7.5); cv.setFillColor(C_DGRAY)
+    cv.setFont("Helvetica-Bold", 8); cv.setFillColor(C_DGRAY)
     cv.drawCentredString(MID_X, cursor, "You")
     cv.drawCentredString(THM_X, cursor, "Them")
-    cursor -= 4
-    rule(cv, PAD, cursor, iw)
+    cursor -= 6
+    hrule(cv, PAD, cursor, iw)
 
-    # Rows
-    for ri, (question, you_ans, them_ans, you_good, them_good) in enumerate(comp_rows):
+    # Chip rows
+    COMP_ROW_H = 34
+    for question, you_ans, them_ans, you_good, them_good in comp_rows:
         cursor -= COMP_ROW_H
-        row_y  = cursor
-        text_y = row_y + COMP_ROW_H / 2 - 3
         cv.setFont("Helvetica-Bold", 8.5); cv.setFillColor(C_BLACK)
-        cv.drawString(PAD + 8, text_y, question)
-        draw_chip(cv, MID_X, row_y, you_ans, you_good)
-        draw_chip(cv, THM_X, row_y, them_ans, them_good)
-        rule(cv, PAD, row_y, iw, color=C_LGRAY, lw=0.4)
+        cv.drawString(PAD + 8, cursor + COMP_ROW_H/2 - 3, question)
+        draw_chip(cv, MID_X, cursor, COMP_ROW_H, you_ans,  you_good)
+        draw_chip(cv, THM_X, cursor, COMP_ROW_H, them_ans, them_good)
+        hrule(cv, PAD, cursor, iw, color=C_LGRAY, lw=0.35)
 
+    # Takeaway
     cursor -= 8
+    TK_H = 48
+    cursor -= TK_H
+    rrect(cv, PAD, cursor, iw, TK_H, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
+    cv.setFont("Helvetica-BoldOblique", 9); cv.setFillColor(C_DGRAY)
+    cv.drawCentredString(PAD + iw/2, cursor + TK_H - 15, tk_line1)
+    l2_size = 10
+    while cv.stringWidth(tk_line2, "Helvetica-Bold", l2_size) > iw - 20 and l2_size > 8:
+        l2_size -= 0.5
+    cv.setFont("Helvetica-Bold", l2_size); cv.setFillColor(C_BLACK)
+    cv.drawCentredString(PAD + iw/2, cursor + 14, tk_line2)
 
-    # Takeaway box
-    cursor -= TAKEAWAY_H
-    rrect(cv, PAD, cursor, iw, TAKEAWAY_H, r=6,
-          fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
-    cv.setFont("Helvetica-Oblique", 10); cv.setFillColor(C_DGRAY)
-    cv.drawCentredString(PAD + iw / 2, cursor + TAKEAWAY_H - 13, tk_line1)
-    cv.setFont("Helvetica-Bold", 10.5); cv.setFillColor(C_BLACK)
-    cv.drawCentredString(PAD + iw / 2, cursor + 13, tk_line2)
+    cursor -= gap
 
-    cursor -= 12
+    # ═══════════════════════════════════════════════════════
+    #  3. WHAT WE FOUND
+    # ═══════════════════════════════════════════════════════
+    sec_label(cv, PAD, cursor, "What We Found")
+    cursor -= SEC_LABEL_H
 
-    # ── 4. WHY THIS HAPPENS ──────────────────────────────────────────────────
-    sec_label(cv, PAD, cursor, "Why This Happens")
-    cursor -= 10
+    for finding in findings:
+        fh = texth(cv, finding, iw - 26, font="Helvetica", size=8.5, lh=13) + 22
+        cursor -= fh
+        rrect(cv, PAD, cursor, iw, fh, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
+        cv.setFillColor(C_ORANGE)
+        cv.rect(PAD, cursor, 3, fh, fill=1, stroke=0)
+        wraptext(cv, finding, PAD + 12, cursor + fh - 13,
+                 iw - 22, font="Helvetica", size=8.5, color=C_BLACK, lh=13)
+        cursor -= 6
 
-    cursor -= WHY_PARA_H + 4
-    rrect(cv, PAD, cursor, iw, WHY_PARA_H, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
+    cursor -= gap
+
+    # ═══════════════════════════════════════════════════════
+    #  4. HOW SEARCHING WORKS NOW
+    # ═══════════════════════════════════════════════════════
+    sec_label(cv, PAD, cursor, "How Searching Works Now")
+    cursor -= SEC_LABEL_H
+
+    LINE_H    = 16
+    OUTCOME_H = 16 + len(out_buls) * LINE_H + 14
+    cursor -= OUTCOME_H
+    rrect(cv, PAD, cursor, iw, OUTCOME_H, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
     cv.setFillColor(C_ORANGE)
-    cv.rect(PAD, cursor, 3, WHY_PARA_H, fill=1, stroke=0)
-    wraptext(cv, why_text, PAD + 12, cursor + WHY_PARA_H - 12,
-             iw - 20, font="Helvetica", size=8.5, color=C_DGRAY, lh=13)
+    cv.rect(PAD, cursor, 3, OUTCOME_H, fill=1, stroke=0)
+    cv.setFont("Helvetica-Bold", 9.5); cv.setFillColor(C_BLACK)
+    cv.drawString(PAD + 12, cursor + OUTCOME_H - 13, out_head)
+    for bi, bullet in enumerate(out_buls):
+        by = cursor + OUTCOME_H - 13 - LINE_H - bi * LINE_H
+        cv.setFont("Helvetica", 8.5); cv.setFillColor(C_ORANGE)
+        cv.drawString(PAD + 12, by, "\u25cf")
+        cv.setFont("Helvetica", 8.5); cv.setFillColor(C_BLACK)
+        cv.drawString(PAD + 22, by, bullet)
 
-    cursor -= 12
+    cursor -= gap
 
-    # ── 5. WHAT CHANGES THIS (AEO education) ─────────────────────────────────
-    sec_label(cv, PAD, cursor, "What Changes This")
-    cursor -= 10
+    # ═══════════════════════════════════════════════════════
+    #  5. DIFFERENTIATOR
+    # ═══════════════════════════════════════════════════════
+    # Absorb any remaining slack into the differentiator card so nothing floats below it
+    DIFF_LINE_H  = 16
+    DIFF_H_BASE  = 18 + 10 + len(diff_buls) * DIFF_LINE_H + 14
+    slack        = max(0, cursor - (CTA_RULE_Y + 8) - DIFF_H_BASE)
+    DIFF_H       = DIFF_H_BASE + slack
+    cursor -= DIFF_H
+    rrect(cv, PAD, cursor, iw, DIFF_H, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
 
-    cursor -= AEO_CARD_H
-    CARD_GAP = 6
-    CARD_W   = (iw - 2 * CARD_GAP) / 3
-    for ci, (heading, body) in enumerate(aeo_cards):
-        cx = PAD + ci * (CARD_W + CARD_GAP)
-        rrect(cv, cx, cursor, CARD_W, AEO_CARD_H, r=6, fill=C_WHITE, stroke=C_LGRAY, sw=0.8)
-        head_y  = cursor + AEO_CARD_H - 13
-        num_str = f"0{ci + 1}  "
-        num_w   = cv.stringWidth(num_str, "Helvetica-Bold", 8.5)
-        cv.setFont("Helvetica-Bold", 8.5); cv.setFillColor(C_ORANGE)
-        cv.drawString(cx + 8, head_y, num_str)
-        cv.setFillColor(C_BLACK)
-        cv.drawString(cx + 8 + num_w, head_y, heading)
-        wraptext(cv, body, cx + 8, head_y - 13,
-                 CARD_W - 16, font="Helvetica", size=7.5, color=C_DGRAY, lh=10)
+    # Headline — centered
+    cv.setFont("Helvetica-Bold", 10); cv.setFillColor(C_BLACK)
+    cv.drawCentredString(PAD + iw/2, cursor + DIFF_H - 14, diff_head)
+    hrule(cv, PAD + 14, cursor + DIFF_H - 20, iw - 28, color=C_LGRAY, lw=0.4)
 
-    cursor -= 12
+    # Bullets — 9pt, left-aligned, more defined as statements
+    buls_start_y = cursor + DIFF_H - 14 - 22 - (slack / 2)
+    for di, bul in enumerate(diff_buls):
+        dy = buls_start_y - di * DIFF_LINE_H
+        cv.setFont("Helvetica", 9); cv.setFillColor(C_DGRAY)
+        cv.drawString(PAD + 14, dy, bul)
 
-    # ── 6. YOUR NUMBERS (client snapshot) ────────────────────────────────────
-    sec_label(cv, PAD, cursor, "Your Numbers")
-    cursor -= 10
-
-    STAT_COL_W = 90
-    geo        = data.get("geo_score", 1)
-    geo_col    = C_GREEN if geo >= 4 else C_ORANGE if geo == 3 else C_RED
-
-    for si, (val, lbl, insight) in enumerate(snapshot):
-        cursor -= SNAP_ROW_H
-        mid_stat = cursor + SNAP_ROW_H / 2
-
-        # Stat value — AI visibility row gets color, others stay black
-        val_col = geo_col if lbl == "AI Visibility" else C_BLACK
-        cv.setFont("Helvetica-Bold", 13); cv.setFillColor(val_col)
-        cv.drawCentredString(PAD + STAT_COL_W / 2, mid_stat + 2, val)
-        cv.setFont("Helvetica", 6.5); cv.setFillColor(C_GRAY)
-        cv.drawCentredString(PAD + STAT_COL_W / 2, mid_stat - 8, lbl)
-
-        # Vertical divider
-        cv.setStrokeColor(C_LGRAY); cv.setLineWidth(0.5)
-        cv.line(PAD + STAT_COL_W + 4, cursor + 4,
-                PAD + STAT_COL_W + 4, cursor + SNAP_ROW_H - 4)
-
-        # Insight — use wraptext to handle long strings safely
-        wraptext(cv, insight, PAD + STAT_COL_W + 12, mid_stat + 4,
-                 iw - STAT_COL_W - 16, font="Helvetica", size=8.5, color=C_DGRAY, lh=12)
-
-        if si < len(snapshot) - 1:
-            cursor -= 4
-            rule(cv, PAD, cursor + 2, iw, color=C_LGRAY, lw=0.3)
-
-    cursor -= 10
-
-    # ── 7. CTA ───────────────────────────────────────────────────────────────
-    cursor -= cta_h
-    rrect(cv, PAD, cursor, iw, cta_h, r=8, fill=C_WHITE, stroke=C_BLACK, sw=1.5)
+    # ═══════════════════════════════════════════════════════
+    #  6. CTA FOOTER — light rule + 3 centered lines
+    # ═══════════════════════════════════════════════════════
+    hrule(cv, PAD, CTA_RULE_Y, iw, color=C_LGRAY, lw=0.6)
     mid = PAD + iw / 2
-    cv.setFont("Helvetica-Bold", 16); cv.setFillColor(C_BLACK)
-    cv.drawCentredString(mid, cursor + cta_h - 22, get_cta_headline())
-    cv.setFont("Helvetica-Bold", 11); cv.setFillColor(C_ORANGE)
-    cv.drawCentredString(mid, cursor + cta_h - 40,
-                         f"{CONTACT_PHONE}  ·  Call or text Emmanuel")
-    cv.setFont("Helvetica", 9); cv.setFillColor(C_DGRAY)
-    cv.drawCentredString(mid, cursor + cta_h - 55,
-                         f"{CONTACT_EMAIL}  ·  {CONTACT_SITE}")
+    cv.setFont("Helvetica-Bold", 13); cv.setFillColor(C_BLACK)
+    cv.drawCentredString(mid, CTA_RULE_Y - 14, get_cta_headline())
+    cv.setFont("Helvetica-Bold", 9); cv.setFillColor(C_ORANGE)
+    cv.drawCentredString(mid, CTA_RULE_Y - 27,
+                         f"{CONTACT_PHONE}  .  Call or text Emmanuel")
+    cv.setFont("Helvetica", 8); cv.setFillColor(C_DGRAY)
+    cv.drawCentredString(mid, CTA_RULE_Y - 39,
+                         f"{CONTACT_EMAIL}  .  {CONTACT_SITE}")
 
     cv.save()
-    print(f"  \u2713  {output_path}  (bottom margin: {cursor - 16:.0f}pt)")
+    slack = cursor - (CTA_RULE_Y + 4)
+    print(f"  \u2713  Saved: {output_path}")
+    print(f"  \u2022  Gap computed: {gap:.1f}pt   Slack above CTA: {slack:.0f}pt"
+          f"  ({'OK' if slack >= 0 else 'OVERFLOW — reduce content or font sizes'})")
 
 
 # ─────────────────────────────────────────────
-#  ENTRY
+#  ENTRY POINT
 # ─────────────────────────────────────────────
 def main():
+    from NewwebAudit import collect_data
     data = collect_data()
-    data["audit_date"] = date.today().strftime("%B %d, %Y")
+    data["audit_date"]  = date.today().strftime("%B %d, %Y")
+    data["_findings"]   = get_findings(data)   # score-mapped, no LLM
+
     safe = (data["business_name"]
             .replace(" ", "_").replace("&", "and").replace("/", "-").lower())
     fn   = f"audit_{safe}_{date.today().strftime('%Y%m%d')}.pdf"

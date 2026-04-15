@@ -1,50 +1,6 @@
-The pdf needs more visualization, like a pie chart or something cool
-The audit/pdf does not create FOMO, needs to create sense of urgency for the business owner.
-The CTA has to be visible for each section
-All the content has to fit on one page so i can print it out easily
-The spacing has to be even throughout and padded accordingly
-The gray text is too small to read, and the contrast from big text to small is too wide, the small text has to match the size more if that makes sense.
+You vs them from comparison table is too cramped to section above.
+The AI suggestions are talking about the numbers the admin inputted, not good.
+The outcome map on line 226 of newaiAudit is too abstract, it doesnt really make sense, it sounds like someone just stating information, not tailored to the business and busines outcomes
 
-
-This is how i check if a potential lead is worth pursuing. 
-
-I look at how many reviews it has, if it is over the 150-200 mark then they have a decent cadence of business.
-Then i determine i look at their website, if it looks bad, then i have Blue on my mind, but im still mainly in orange mode (AI visbility, get more leads by dominating your online precense everywhere type pitch. Blue pitch is more, we gotta tackle the fundamentals, if they have no site then my approach is i will build you a site, if they do have a site and it is so bad/confusing/unclear then i scan the footer for any link of an agency building it. If there is a link to an external agency that built the website, then my approach gets a little more skewed, i dont go to them (call) and say, lets fix your website, i go to more of the orange approach. But, if the site is really bad and an agency did build it (we are assuming an agency built it because of the footer link/watermark, then i make a mocksite on my own, and show it on my ipad when in person, as like a bonus little "here you go, this is how awesome me and queso ventures is. Another thing to note, i check this for every size business (i measure based on how many reviews) if the url has /locations or something that denotes there is a possibility for more locations, i dont really consider it. But, i dont want to say it is out of the picture, i dont want to close that door on small local franchises. It is only if they are franchises with different owners per franchise. For example, if a donut shop does so well they open a 2nd location then they are a majority blue slightly orange client. Just because they have another location that doesnt mean they are out of contention. But if a place like Hand and Stone massage, that is out of contention because the actual owner isnt here and it is a bunch of corporate rules.
-
-I dont need a tailored pitch to each because it kinda is the same formula for each, plus i never really looked at it haha. The most important thing i can have tailored for each one would be the corresponding AI visbility search to run for each lead to verify if they show up or not. Chances are, alot of leads would have the same search so i can just save the results and re run each week to keep up to date if i need to (unless i knock out all the leads in less than a week, that would be awesome)
-
-This is how i determine if a lead is a blue immediately, they dont have a website or their website is so bad that AI visbility takes a back seat. Here is how i qualify whether AI visbility takes a back seat, if the site is actively costing them leads, if there is no site present (as mentioned), and/or if the site is so confusing/difficult/outdated to understand what to do. This will be hard to measure because i am going thru each one, skimming for these measurements, but if an LLM can scan each site that would be a Blue (if the site exists, that would be neat) Usually, Blue can be one of 2-3 types. In business for a while without a website because they think a website is just for information and their mentality is "if it aint broken dont fix it" but when i call them, i paint a website in the light of a tool to grow, painting a picture with goals they probably have. just started out, low reviews, messy GBP overall kinda unfamiliar with how all the tech stuff works, mainly focuses on their trade (business). Or they did the site themselves (usually wordpress, wix, or godaddy Airo) and it is hurting them instead of helping. The pitch with them as to note diminish their efforts is "lets make your website work just as hard as you do"
-
-AI search doesn't work like Google — keywords are only part of the equation.
-
-Audit PDFs:
-- gotta find a way to combine them both into 1 sheet
-
-From OG:
-- competitor table is the most important aspect
-- competitor table > Visibility breakdown
-- visbility breakdown can just be summarized in the tool bar on top with the %score and all of that. 
-- No need to talk about phone speed, can note but not relevant to what queso ventures does.
-- What we found section can be turned into the AI specific stuff, because the What We found section are website fixes, but if we are always giving these audits to oranges, they only need to hear about their AI Visibility, website i can abstract in person, but for the sake of a "report" and how this printed paper is the thing that differentiates me from any other "agency" lets try to leave them with something that can help them? But dont give too much away, gotta let them know in simple business terms, they have to be thinking, "I know my site is costing me business, adequete in its current form is not enough, this Queso Ventures guy can help me and fast, and most importantly he is easy to talk to and doesnt make these topics confusing." That should be the main theme of the website report, i want to utilize business driven outcomes/solutions tailored to the industry. what that means is for medical stuff, customers becomes patients. For dentists same thing, and so on. 
-
-All the text on the audit for both web and AI has to reinforce these principles:
-- What is missing/not enough
-- How does this hurt my current business, and why is it not ok to just sweep it under the rug, build fomo, talk competitors. This is why the competitor table is absolutely paramount
-- Most importantly, what can they expect when Queso Ventures handles this.
-
-For the AI audit side, i feel like alot of it can be hardocded and the same message for each audit ran. The thing that should be inputted by an admin or filled in via LLM (if it can do that) would be the example potential user search for a business-specific service in the specific location. then the recommendations. But, the recommendations on Where you stand now, will probably be very similar throught all the leads/potential clients and the information is relevant to all of them. just have to mind the industry specific words like patients/customers etc and just general relevance. 
-
-For the 2 ways forward, maybe its time to cut this one out, or reformat completely? I know there has to be a CTA on this pdf. I just cant give them all this info without any semblance of a next step, but i think it takes too much space. The 2 ways forward on the initial audit can be too much info at first, but i know we need to let them konw what they have to do next/expect next. I am open to discussion on this, but ideally if it all fits on 1 page, awesome. 
-
-What is AI visbility section, i really like this section, but the most important thing i can do in this part is reinforce that Queso Ventures is not SEO (remember mainly orange clients get this, so growth matters, blue are starting with the fundementals). The idea i need to cemenet in all of their minds is this: SEO gets you found on google, I make sure you exist on the tools that are replacing google!!! <- very important
-
-I also need to cement that this is not a marketing agency, and if they currently have a marketing agency, that is actually better because marketing handles how you look when you show up, i make sure you show up.
-
-My "trademark" AI Search doesnt work like google section, can be replaced by the 2 ways forward or just any other part that reinforces that Queso Ventures is the best way to grow and help them get a bunch of new people finding them. 
-
-Ready to show up more section, that CTA feels a little weird because it is a detached section at the bottom. This message should be present everywhere. But remember, all on 1 page.
-
-
-Audit feedback:
-
-doesnt make fomo, needs visualization.
+Too much space between the CTA footer and the A new layer section, if we make every sectoin have uniform spacing (with room to grow for the info heavy sections) eveything will look better.
+For the CTA footer, no need for a bubble, just a full width top horizontal bar to indicate the footer is enough, make it light so it doesnt use/waste printer ink.

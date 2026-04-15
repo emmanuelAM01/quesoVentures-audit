@@ -1,14 +1,203 @@
 #!/usr/bin/env python3
 """
-aiAudit.py  —  Queso Ventures
-All copy. Edit here. No PDF logic.
+NewaiAudit.py  —  Queso Ventures
+Copy layer only. No PDF logic lives here.
 
-Language rules:
-  - No "AEO", "GEO", "ChatGPT" in client-facing prose
-  - Use "new search tools", "AI tools" — plain language only
-  - Always end on the solution or the opportunity — never on the problem alone
+Rules:
+  - No LLM anywhere in this file. All copy is hardcoded.
+  - No "AEO", "GEO", "ChatGPT", "algorithm", "structured data" in client prose.
+  - No platform names that give them DIY ideas (no "Google Business Profile" etc).
+  - No raw scores exposed anywhere.
+  - Periods not dashes. Short punchy sentences.
+  - Industry term swaps throughout: patient / client / guest / customer / member.
+  - Every finding ends on the business impact, not the technical problem.
+  - Every outcome line ends on the growth moment or the cost of inaction.
 """
 
+import os
+
+
+# ─────────────────────────────────────────────
+#  INDUSTRY CONTEXT MAP
+# ─────────────────────────────────────────────
+
+INDUSTRY_MAP = {
+    "clinic":      "patient",
+    "health":      "patient",
+    "wellness":    "patient",
+    "medical":     "patient",
+    "dental":      "patient",
+    "dentist":     "patient",
+    "chiro":       "patient",
+    "therapy":     "patient",
+    "therapist":   "patient",
+    "rehab":       "patient",
+    "med spa":     "client",
+    "spa":         "client",
+    "salon":       "client",
+    "barbershop":  "client",
+    "barber":      "client",
+    "law":         "client",
+    "attorney":    "client",
+    "legal":       "client",
+    "accountant":  "client",
+    "cpa":         "client",
+    "financial":   "client",
+    "real estate": "client",
+    "realty":      "client",
+    "realtor":     "client",
+    "restaurant":  "guest",
+    "cafe":        "guest",
+    "coffee":      "guest",
+    "bakery":      "guest",
+    "food truck":  "guest",
+    "hotel":       "guest",
+    "gym":         "member",
+    "fitness":     "member",
+    "crossfit":    "member",
+    "yoga":        "member",
+    "auto":        "customer",
+    "mechanic":    "customer",
+    "plumb":       "customer",
+    "electric":    "customer",
+    "hvac":        "customer",
+    "roofing":     "customer",
+    "landscap":    "customer",
+    "cleaning":    "customer",
+    "pest":        "customer",
+}
+
+def get_industry_term(business_type: str) -> str:
+    bt = business_type.lower()
+    for fragment, term in INDUSTRY_MAP.items():
+        if fragment in bt:
+            return term
+    return "customer"
+
+
+# ─────────────────────────────────────────────
+#  FINDINGS  (score-mapped, no LLM)
+#
+#  Three findings always generated from these signals:
+#    geo_score       1=not showing up  3=sometimes  5=yes
+#    visibility_score (Maps)  same scale
+#    gbp_score       1=bare  2=off  3=basic  5=well maintained
+#    has_website     True/False
+#    client_ps       0-100 or None
+#
+#  Each finding: 1-2 short sentences. Impact first, not cause.
+#  No platform names. No scores or numbers mentioned.
+# ─────────────────────────────────────────────
+
+def get_findings(data: dict) -> list:
+    term     = data.get("industry_term", "customer")
+    city     = data.get("business_city", "your area").split(",")[0].strip()
+    btype    = data.get("business_type", "your business")
+    geo      = data.get("geo_score", 1)
+    vis      = data.get("visibility_score", 1)
+    gbp      = data.get("gbp_score", 3)
+    has_site = data.get("has_website", False)
+    ps       = data.get("client_ps")
+    seo      = data.get("_seo", {})
+    city_on_site = seo.get("city_in_content", False)
+    phone_on_site = seo.get("has_phone", False)
+
+    findings = []
+
+    # ── FINDING 1: New search tool visibility (geo_score) ──────────────────
+    # This is always finding 1 — it is the core of the pitch.
+    if geo == 1:
+        findings.append(
+            f"When someone in {city} uses a new search tool to find a {btype}, "
+            f"your business is not in the answer. "
+            f"Those {term}s are going somewhere else before they ever know you exist."
+        )
+    elif geo == 3:
+        findings.append(
+            f"You show up on new search tools sometimes — not consistently. "
+            f"The {term}s you miss on the days you don't appear "
+            f"are booking with whoever does show up."
+        )
+    else:
+        findings.append(
+            f"You're showing up on new search tools — that puts you ahead of most. "
+            f"Staying consistent is what keeps that advantage compounding in your favor."
+        )
+
+    # ── FINDING 2: Maps + online presence completeness ─────────────────────
+    # Combo of visibility_score + gbp_score
+    if vis == 1 and gbp <= 2:
+        findings.append(
+            f"Your local presence is incomplete in the places new {term}s look first. "
+            f"When your information is missing or inconsistent across the web, "
+            f"search tools pass you over — even if someone is searching for exactly what you offer."
+        )
+    elif vis == 1 and gbp == 3:
+        findings.append(
+            f"You have a basic local presence, but it is not enough to get surfaced "
+            f"when {term}s search nearby. "
+            f"The gap between showing up sometimes and showing up every time "
+            f"is a more complete, consistent presence across the web."
+        )
+    elif vis == 3:
+        findings.append(
+            f"You appear locally on some searches but not others. "
+            f"Every search you miss is a {term} who finds someone else, "
+            f"leaves them a review, and sends friends their way instead of yours."
+        )
+    else:
+        findings.append(
+            f"Your local presence is working in your favor. "
+            f"The opportunity now is in the layer beyond local search — "
+            f"the places new search tools read that most businesses in {city} haven't addressed yet."
+        )
+
+    # ── FINDING 3: Website + site signals ──────────────────────────────────
+    # Keyed on has_website, ps, city_on_site, phone_on_site
+    if not has_site:
+        findings.append(
+            f"You don't have a website, which means new search tools have almost nothing "
+            f"to read about your business. "
+            f"That single gap limits everything else — no site means no signal."
+        )
+    elif ps is not None and ps < 50:
+        findings.append(
+            f"Your website loads slowly on phones, which is how most {term}s are searching. "
+            f"A slow site signals to every tool that reads it "
+            f"that your business is not keeping up — and they respond accordingly."
+        )
+    elif not city_on_site and not phone_on_site:
+        findings.append(
+            f"Your website doesn't clearly tell new search tools where you are "
+            f"or how to reach you. "
+            f"That missing context is one of the main reasons you get passed over "
+            f"when someone nearby is looking."
+        )
+    elif not city_on_site:
+        findings.append(
+            f"Your website doesn't clearly signal that you serve {city}. "
+            f"New search tools use that context to decide who to recommend locally — "
+            f"without it, you're invisible to {term}s searching right in your area."
+        )
+    elif ps is not None and ps < 70:
+        findings.append(
+            f"Your site covers the basics but has room to work harder. "
+            f"The businesses earning the most new {term}s from search "
+            f"have sites that actively reinforce their presence — not just describe their services."
+        )
+    else:
+        findings.append(
+            f"Your website is a solid foundation. "
+            f"The next layer is making sure everything it says about you "
+            f"is echoed consistently across every place new search tools look."
+        )
+
+    return findings[:3]
+
+
+# ─────────────────────────────────────────────
+#  COMPETITOR TABLE
+# ─────────────────────────────────────────────
 
 def get_competitor_rows(
     comp_name, client_reviews, comp_reviews,
@@ -16,12 +205,8 @@ def get_competitor_rows(
     client_vis=1, comp_vis=5,
     client_geo=1, comp_geo=5,
 ):
-    """
-    Returns list of (question, you_answer, them_answer, you_is_good, them_is_good).
-    """
     rows = []
 
-    # Row 1 — reviews
     try:
         c = int(str(client_reviews).replace(",", ""))
         t = int(str(comp_reviews).replace(",", ""))
@@ -30,220 +215,195 @@ def get_competitor_rows(
     except (ValueError, TypeError):
         c, t = "?", "?"
         you_good = them_good = False
-    rows.append((
-        "Who has more reviews?",
-        str(c), str(t),
-        you_good, them_good,
-    ))
+    rows.append(("Who has more reviews?", str(c), str(t), you_good, them_good))
 
-    # Row 2 — Google Maps / local search
     def vis_ans(s):
         if s is None: return "N/A"
         if s >= 4:    return "Yes"
         if s == 3:    return "Sometimes"
-        return "No"
+        return "Not Yet"
+
     rows.append((
-        "Who shows up in Google Maps nearby?",
+        "Showing up in Google Maps?",
         vis_ans(client_vis), vis_ans(comp_vis),
         (client_vis or 0) >= 4, (comp_vis or 0) >= 4,
     ))
-
-    # Row 3 — new search tools
-    def geo_ans(s):
-        if s is None: return "N/A"
-        if s >= 4:    return "Yes"
-        if s == 3:    return "Sometimes"
-        return "No"
     rows.append((
-        "Who gets recommended by AI tools?",
-        geo_ans(client_geo), geo_ans(comp_geo),
+        "Found by new search tools?",
+        vis_ans(client_geo), vis_ans(comp_geo),
         (client_geo or 0) >= 4, (comp_geo or 0) >= 4,
     ))
-
     return rows
 
 
 def get_competitor_takeaway(featured_query="", industry_term="customer"):
-    """
-    Two short lines below the comparison table.
-    """
     if featured_query:
-        line1 = f'When someone searches: "{featured_query}"'
+        line1 = f'Someone searches: "{featured_query}"'
     else:
-        line1 = "When someone uses an AI tool to find a business like yours —"
-    line2 = "AI tools give one answer, not a list. When it's your competitor, that call goes to them."
+        line1 = f"A {industry_term} uses a new search tool to find a business like yours."
+    line2 = "A curated recommendation is built. One business is featured. If it is not you, that search never happened."
     return (line1, line2)
 
 
-def get_score_factors(data, industry_term="customer"):
-    """
-    Returns list of 2 (label, insight) tuples explaining the biggest score drivers.
-    Used in the "Your Visibility Score" section.
-    """
-    factors = []
-    geo     = data.get("geo_score", 1)
-    rating  = data.get("review_rating", 0)
-    reviews = data.get("review_count", 0)
-    city    = data.get("business_city", "your area")
-    service = data.get("featured_service", f"{industry_term} services")
+# ─────────────────────────────────────────────
+#  HOW SEARCHING WORKS NOW  (score-mapped, no LLM)
+# ─────────────────────────────────────────────
 
-    # Factor 1 — AI/geo visibility (35% of score — biggest single weight)
-    if geo <= 2:
-        factors.append((
-            "Not showing up on AI tools.",
-            f"When {industry_term}s in {city} search for {service}, your business isn't "
-            f"in the results. That's the biggest gap in your score.",
-        ))
-    elif geo == 3:
-        factors.append((
-            "Showing up sometimes — not consistently.",
-            f"You appear on AI tools occasionally, but not reliably. Consistency is what "
-            f"separates businesses that get recommended from ones that get skipped.",
-        ))
-    else:
-        factors.append((
-            "AI tools are finding you.",
-            f"You're showing up when {industry_term}s search in {city}. "
-            f"Keeping this consistent is what keeps you ahead.",
-        ))
-
-    # Factor 2 — reviews
-    try:
-        r   = float(str(rating))
-        cnt = int(str(reviews).replace(",", ""))
-    except (ValueError, TypeError):
-        r, cnt = 0, 0
-
-    if r >= 4.5 and cnt >= 50:
-        factors.append((
-            "Strong review profile.",
-            f"A {rating}\u2605 rating with {reviews} reviews is a genuine asset — AI tools "
-            f"factor both into who they recommend.",
-        ))
-    elif cnt < 25:
-        factors.append((
-            "Review volume is a gap.",
-            f"Fewer reviews means less signal for AI tools to work with. "
-            f"Volume and recency both affect whether you show up.",
-        ))
-    else:
-        factors.append((
-            f"Solid rating at {rating}\u2605.",
-            f"Your reviews are working in your favor. The opportunity is in the places "
-            f"AI tools look that Google doesn't cover.",
-        ))
-
-    return factors
-
-
-def get_why_losing(industry_term="customer", city="your area", featured_service=""):
-    """
-    Single paragraph explaining the mechanism — cookie-cutter with keyword substitution.
-    """
-    service = featured_service if featured_service else f"{industry_term} services"
-    return (
-        f"When a {industry_term} in {city} asks an AI tool for {service}, it picks one business — "
-        f"not a list. It looks at reviews, listings, and how complete your presence is across the web. "
-        f"The most consistent presence gets recommended. Gaps mean you get skipped."
-    )
-
-
-def get_aeo_cards():
-    """
-    Returns list of 3 (title, body) tuples for the "What Changes This" education section.
-    Explains AEO/GEO principles in plain business-owner language.
-    """
-    return [
-        (
-            "One Answer, Not a List",
-            "AI tools return one recommendation. Getting there means your presence has to be "
-            "complete — reviews, listings, and citations all pointing at you.",
+_OUTCOME_MAP = {
+    "not_visible": {
+        "patient": (
+            "Every search that does not find you finds someone else.",
+            "That patient books with them. Leaves a review for them. Refers friends to them.",
+            "Their presence grows. Yours stays the same. The gap widens every day.",
         ),
-        (
-            "Consistency Over Spend",
-            "AI tools don't rank by ad budget. They rank by how consistent and complete your "
-            "information is across every platform they read from.",
+        "client": (
+            "Every search that does not find you finds someone else.",
+            "That client books with them. Leaves a review for them. Tells their friends.",
+            "Their presence grows. Yours stays the same. The gap widens every day.",
         ),
-        (
-            "The Window Is Open",
-            "Most businesses in your area haven't built this yet. First to build it becomes "
-            "the default answer — until someone catches up.",
+        "guest": (
+            "Every search that does not find you finds someone else.",
+            "That guest goes to them. Posts about them. Comes back to them.",
+            "Their presence grows. Yours stays the same. The gap widens every day.",
         ),
-    ]
+        "member": (
+            "Every search that does not find you finds someone else.",
+            "That person joins them. Refers friends to them. Stays with them.",
+            "Their presence grows. Yours stays the same. The gap widens every day.",
+        ),
+        "customer": (
+            "Every search that does not find you finds someone else.",
+            "That customer calls them. Leaves a review for them. Calls them again next time.",
+            "Their presence grows. Yours stays the same. The gap widens every day.",
+        ),
+    },
+    "sometimes": {
+        "patient": (
+            "You show up. Just not every time.",
+            "The patients searching on the days you do not appear book with whoever does.",
+            "Inconsistency compounds. Every missed search is a relationship started elsewhere.",
+        ),
+        "client": (
+            "You show up. Just not every time.",
+            "The clients searching on the days you do not appear book with whoever does.",
+            "Inconsistency compounds. Every missed search is a relationship started elsewhere.",
+        ),
+        "guest": (
+            "You show up. Just not every time.",
+            "The guests searching on the days you do not appear go somewhere else.",
+            "Inconsistency compounds. Every missed search is a habit formed elsewhere.",
+        ),
+        "member": (
+            "You show up. Just not every time.",
+            "The people searching on the days you do not appear join somewhere else.",
+            "Inconsistency compounds. Every missed search is a membership that goes elsewhere.",
+        ),
+        "customer": (
+            "You show up. Just not every time.",
+            "The customers searching on the days you do not appear call someone else.",
+            "Inconsistency compounds. Every missed search is a job that goes elsewhere.",
+        ),
+    },
+    "visible": {
+        "patient": (
+            "You are showing up. Keep earning it.",
+            "Every consistent appearance is another patient who found you first.",
+            "Staying consistent is what turns visibility into a full schedule.",
+        ),
+        "client": (
+            "You are showing up. Keep earning it.",
+            "Every consistent appearance is another client who found you first.",
+            "Staying consistent is what turns visibility into a fully booked calendar.",
+        ),
+        "guest": (
+            "You are showing up. Keep earning it.",
+            "Every consistent appearance is another guest who chose you first.",
+            "Staying consistent is what turns visibility into a full house.",
+        ),
+        "member": (
+            "You are showing up. Keep earning it.",
+            "Every consistent appearance is another person who found you first.",
+            "Staying consistent is what turns visibility into steady membership growth.",
+        ),
+        "customer": (
+            "You are showing up. Keep earning it.",
+            "Every consistent appearance is another customer who called you first.",
+            "Staying consistent is what turns visibility into steady inbound work.",
+        ),
+    },
+}
 
 
-def get_client_snapshot(data, industry_term="customer"):
-    """
-    Returns list of 3 (value, label, insight) tuples using the client's actual data.
-    Used in the "Your Numbers" section.
-    """
-    rows      = []
-    comp_name = data.get("comp_name", "your competitor")
-    city      = data.get("business_city", "your area")
+def get_outcome(data: dict) -> tuple:
+    geo  = data.get("geo_score", 1)
+    term = data.get("industry_term", "customer")
+    tier = "not_visible" if geo <= 2 else "sometimes" if geo == 3 else "visible"
+    t    = term if term in _OUTCOME_MAP[tier] else "customer"
+    vals = _OUTCOME_MAP[tier][t]
+    return (vals[0], list(vals[1:]))
 
-    # Row 1 — reviews vs competitor
-    try:
-        mine   = int(str(data.get("review_count", 0)).replace(",", ""))
-        theirs = int(str(data.get("comp_reviews", 0)).replace(",", ""))
-        gap    = theirs - mine
-    except (ValueError, TypeError):
-        mine, theirs, gap = 0, 0, 0
 
-    if gap > 50:
-        insight = (f"{comp_name} has {gap} more reviews. AI tools weight volume and recency "
-                   f"— that gap is showing up in your score.")
-    elif gap > 0:
-        insight = (f"{comp_name} has a slight review lead. Closing that gap moves the needle "
-                   f"on AI recommendations.")
-    else:
-        insight = ("You're holding your own on reviews. Keeping the volume growing is what "
-                   "sustains the advantage.")
-    rows.append((str(mine), "Your Reviews", insight))
+# ─────────────────────────────────────────────
+#  DIFFERENTIATOR  (keyword-mapped, no LLM)
+# ─────────────────────────────────────────────
 
-    # Row 2 — AI visibility status
-    geo       = data.get("geo_score", 1)
-    geo_label = "Showing Up" if geo >= 4 else "Partial" if geo == 3 else "Not Visible"
-    if geo <= 2:
-        ai_insight = (f"AI tools aren't surfacing your business when {industry_term}s search "
-                      f"in {city}. This is the single biggest lever in your score.")
-    elif geo == 3:
-        ai_insight = ("You show up some of the time. The gap between 'sometimes' and 'every "
-                      "time' is a more complete presence.")
-    else:
-        ai_insight = ("You're showing up on AI tools. Maintaining this means keeping your "
-                      "presence fresh and consistent.")
-    rows.append((geo_label, "AI Visibility", ai_insight))
+_DIFF = {
+    "patient": (
+        "The layer that makes everything else work.",
+        [
+            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "New search tools decide who gets recommended before a patient ever sees your website.",
+            "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
+            "Queso Ventures does this exclusively. New patients start finding you. That is the whole point.",
+        ],
+    ),
+    "client": (
+        "The layer that makes everything else work.",
+        [
+            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "New search tools decide who gets recommended before a client ever sees your website.",
+            "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
+            "Queso Ventures does this exclusively. New clients start finding you. That is the whole point.",
+        ],
+    ),
+    "guest": (
+        "The layer that makes everything else work.",
+        [
+            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "New search tools decide who gets recommended before a guest ever finds your page.",
+            "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
+            "Queso Ventures does this exclusively. New guests start finding you. That is the whole point.",
+        ],
+    ),
+    "member": (
+        "The layer that makes everything else work.",
+        [
+            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "New search tools decide who gets recommended before a potential member ever sees your site.",
+            "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
+            "Queso Ventures does this exclusively. New members start finding you. That is the whole point.",
+        ],
+    ),
+    "customer": (
+        "The layer that makes everything else work.",
+        [
+            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "New search tools decide who gets recommended before a customer ever reaches your site.",
+            "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
+            "Queso Ventures does this exclusively. New customers start finding you. That is the whole point.",
+        ],
+    ),
+}
 
-    # Row 3 — website speed or GBP photos
-    ps = data.get("client_ps")
-    if ps is not None:
-        ps_val   = f"{ps}/100"
-        ps_label = "Site Speed"
-        if ps >= 70:
-            ps_insight = ("Your site loads fast — that's a positive signal. AI tools factor "
-                          "site quality into their reads.")
-        elif ps >= 50:
-            ps_insight = ("Your site is middling on speed. A slow site signals to AI tools "
-                          "that your business isn't keeping up.")
-        else:
-            ps_insight = (f"A {ps}/100 speed score is holding you back. AI tools read site "
-                          f"quality as a proxy for business quality.")
-        rows.append((ps_val, ps_label, ps_insight))
-    else:
-        photos    = data.get("gbp_photo_count", 0)
-        ph_insight = (
-            "Strong photo count — your listing looks active, which AI tools favor."
-            if photos >= 10 else
-            "Thin photo count signals an incomplete listing. AI tools weight listing completeness."
-        )
-        rows.append((str(photos), "Profile Photos", ph_insight))
 
-    return rows
+def get_differentiator(industry_term="customer"):
+    t = industry_term if industry_term in _DIFF else "customer"
+    return _DIFF[t]
 
+
+# ─────────────────────────────────────────────
+#  CTA
+# ─────────────────────────────────────────────
 
 def get_cta_headline():
-    return "Let's get you found sooner."
-
-
-def get_cta_subline(email, phone):
-    return f"{email}  ·  Call or text Emmanuel  ·  {phone}"
+    return "Let's get you found."
