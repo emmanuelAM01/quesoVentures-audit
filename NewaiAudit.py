@@ -252,29 +252,34 @@ def get_competitor_takeaway(featured_query="", industry_term="customer"):
 _OUTCOME_MAP = {
     "not_visible": {
         "patient": (
-            "Every search that does not find you finds someone else.",
-            "That patient books with them. Leaves a review for them. Refers friends to them.",
-            "Their presence grows. Yours stays the same. The gap widens every day.",
+            "Search has changed. Most businesses haven't.",
+            "People aren't scrolling a list anymore. They ask, and they get one or two answers handed to them.",
+            "Who gets those answers is determined by how complete and consistent your presence is across the entire web — not just your website.",
+            "The practices that build this first become the default answer. Defaults are hard to displace.",
         ),
         "client": (
-            "Every search that does not find you finds someone else.",
-            "That client books with them. Leaves a review for them. Tells their friends.",
-            "Their presence grows. Yours stays the same. The gap widens every day.",
+            "Search has changed. Most businesses haven't.",
+            "People aren't scrolling a list anymore. They ask, and they get one or two answers handed to them.",
+            "Who gets those answers is determined by how complete and consistent your presence is across the entire web — not just your website.",
+            "The businesses that build this first become the default answer. Defaults are hard to displace.",
         ),
         "guest": (
-            "Every search that does not find you finds someone else.",
-            "That guest goes to them. Posts about them. Comes back to them.",
-            "Their presence grows. Yours stays the same. The gap widens every day.",
+            "Search has changed. Most businesses haven't.",
+            "People aren't scrolling a list anymore. They ask, and they get one or two answers handed to them.",
+            "Who gets those answers is determined by how complete and consistent your presence is across the entire web — not just your website.",
+            "The spots that build this first become the default answer. Defaults are hard to displace.",
         ),
         "member": (
-            "Every search that does not find you finds someone else.",
-            "That person joins them. Refers friends to them. Stays with them.",
-            "Their presence grows. Yours stays the same. The gap widens every day.",
+            "Search has changed. Most businesses haven't.",
+            "People aren't scrolling a list anymore. They ask, and they get one or two answers handed to them.",
+            "Who gets those answers is determined by how complete and consistent your presence is across the entire web — not just your website.",
+            "The studios that build this first become the default answer. Defaults are hard to displace.",
         ),
         "customer": (
-            "Every search that does not find you finds someone else.",
-            "That customer calls them. Leaves a review for them. Calls them again next time.",
-            "Their presence grows. Yours stays the same. The gap widens every day.",
+            "Search has changed. Most businesses haven't.",
+            "People aren't scrolling a list anymore. They ask, and they get one or two answers handed to them.",
+            "Who gets those answers is determined by how complete and consistent your presence is across the entire web — not just your website.",
+            "The businesses that build this first become the default answer. Defaults are hard to displace.",
         ),
     },
     "sometimes": {
@@ -351,46 +356,46 @@ _DIFF = {
     "patient": (
         "The layer that makes everything else work.",
         [
-            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "SEO and marketing make sure you look good when you show up. Queso Ventures makes sure you always show up.",
             "New search tools decide who gets recommended before a patient ever sees your website.",
             "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
-            "Queso Ventures does this exclusively. New patients start finding you. That is the whole point.",
+            "Queso Ventures works directly with you to make sure you always show up when your next patient is looking",
         ],
     ),
     "client": (
         "The layer that makes everything else work.",
         [
-            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "SEO and marketing make sure you look good when you show up. Queso Ventures makes sure you always show up.",
             "New search tools decide who gets recommended before a client ever sees your website.",
             "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
-            "Queso Ventures does this exclusively. New clients start finding you. That is the whole point.",
+            "Queso Ventures works directly with you to make sure you always show up when your next client is looking",
         ],
     ),
     "guest": (
         "The layer that makes everything else work.",
         [
-            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "SEO and marketing make sure you look good when you show up. Queso Ventures makes sure you always show up.",
             "New search tools decide who gets recommended before a guest ever finds your page.",
             "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
-            "Queso Ventures does this exclusively. New guests start finding you. That is the whole point.",
+            "Queso Ventures works directly with you to make sure you always show up when your next guest is looking",
         ],
     ),
     "member": (
         "The layer that makes everything else work.",
         [
-            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "SEO and marketing make sure you look good when you show up. Queso Ventures makes sure you always show up.",
             "New search tools decide who gets recommended before a potential member ever sees your site.",
             "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
-            "Queso Ventures does this exclusively. New members start finding you. That is the whole point.",
+            "Queso Ventures works directly with you to make sure you always show up when your next member is looking",
         ],
     ),
     "customer": (
         "The layer that makes everything else work.",
         [
-            "SEO and marketing are valuable. Without visibility, neither one gets the chance to matter.",
+            "SEO and marketing make sure you look good when you show up. Queso Ventures makes sure you always show up.",
             "New search tools decide who gets recommended before a customer ever reaches your site.",
             "Building the right presence means knowing exactly what these models look for and how they are trained to surface it.",
-            "Queso Ventures does this exclusively. New customers start finding you. That is the whole point.",
+            "Queso Ventures works directly with you to make sure you always show up when your next customer is looking",
         ],
     ),
 }
